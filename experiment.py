@@ -1,7 +1,7 @@
 import utils
 import torch
 import neptune
-from train_with_generators import standard_net_step
+from train_net import standard_net_step
 import torchvision
 import pathlib
 import os

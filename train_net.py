@@ -9,6 +9,8 @@ from torch.utils.data import DataLoader
 from typing import Callable, List, Union
 from time import time
 from callbacks import DefaultCallback, ProgressBarLogger, CallbackList, Callback
+from external.few_shot.few_shot.matching import matching_net_predictions, pairwise_distances, clip_grad_norm_
+
 # from metrics import NAMED_METRICS
 # from logger import LOGGER, Log
 import neptune
@@ -130,8 +132,9 @@ def fit(model: Module, optimiser: Optimizer, loss_fn: Callable, epochs: int, dat
 
 
 
-def standard_net_step(images, labels, model, loss_fn, optimizer, use_cuda, train):
+def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
     logs = {}
+    images, labels, more = data
     if train:
         model.train()
         optimizer.zero_grad()
@@ -148,9 +151,9 @@ def standard_net_step(images, labels, model, loss_fn, optimizer, use_cuda, train
         optimizer.step()
     return loss, labels, predicted, logs
 
-from external.few_shot.few_shot.matching import matching_net_predictions, pairwise_distances
-def matching_net_step(x, y, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries, distance='l2', fce=False):
+def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries, distance='l2', fce=False):
     logs = {}
+    x, y, more = data
     EPSILON = 1e-8
     if train:
         model.train()
@@ -242,9 +245,7 @@ def train_net(train_loader, use_cuda, net, params_to_update, max_iterations, cal
                 print('Time Elapsed 100 iter: {}'.format(time() - start))
                 start = time()
 
-            # get the inputs; data is a list of [inputs, labels]
-            x, y, more = data
-            loss, y_true, y_pred, logs = training_step(x, y, net, loss_fn, optimizer, use_cuda, **training_step_kwargs)
+            loss, y_true, y_pred, logs = training_step(data, net, loss_fn, optimizer, use_cuda, **training_step_kwargs)
 
             # batch_logs = batch_metrics(net, predicted, labels, metrics, batch_logs)
             batch_logs = {'y_pred': y_pred, 'loss': loss, 'y_true': y_true, 'tot_iter': tot_iter, 'stop': False,
