@@ -10,76 +10,8 @@ from typing import Callable, List, Union
 from time import time
 from callbacks import DefaultCallback, ProgressBarLogger, CallbackList, Callback
 # from metrics import NAMED_METRICS
-from logger import LOGGER, Log
+# from logger import LOGGER, Log
 import neptune
-
-class MetricsCallback(Callback):
-    def __init__(self, use_cuda, compute_mean_acc_every=5):
-        """
-        We keep all the computing logging here. However notice that instanciating a lot of these doesn't change match, since nothing will be computed if the user doesn't ask for them. Also this class is important as we need to update total_samples and correct_samples at every iteration.
-        @param use_cuda:
-        @param compute_mean_acc_every:
-        """
-        self.use_cuda = use_cuda
-        self.compute_mean_acc_every = compute_mean_acc_every
-        tot_num_iterations = Log(name='tot_num_iterations', init_value=0,
-                                 compute_value=lambda logger:
-                                 logger.get('tot_num_iterations') + 1, auto_update=True)
-
-        correct_train = Log(name='correct_train', init_value=0,
-                            compute_value=lambda logger:
-                            logger.get('correct_train') +
-                            ((logger.get('y_pred').cuda() if self.use_cuda else logger.get('y_pred') ==
-                                                                           logger.get('y_true').cuda() if self.use_cuda else logger.get('y_true')).sum().item()), auto_update=True)
-
-        total_samples = Log(name='total_samples', init_value=0,
-                            compute_value=lambda logger:
-                            logger.get('total_samples') + logger.get('y_true').size(0),
-                            auto_update=True)
-
-        running_loss = Log(name='running_loss', init_value=0,
-                           compute_value=lambda logger:
-                           logger.get('running_loss') + logger.get('loss'), auto_update=True)
-
-        def compute_mean(logger):
-            x = logger.get('running_loss') / compute_mean_acc_every
-            logger.add_end_fun(logger.set_value('running_loss', 0))
-            return x
-        mean_loss = Log(name='mean_loss',
-                        compute_value=compute_mean)
-
-        def compute_acc_train(logger):
-            x = logger.get('correct_train') / logger.get('total_samples')
-            logger.add_end_fun(logger.set_value('correct_train', 0))
-            logger.add_end_fun(logger.set_value('total_samples', 0))
-            return x
-        mean_acc_train = Log(name='mean_acc_train',
-                             compute_value=compute_acc_train)
-
-        [LOGGER.add_log(i) for i in [tot_num_iterations, correct_train, total_samples, running_loss, mean_loss, mean_acc_train]]
-
-class StandardMetrics(MetricsCallback):
-    def __init__(self, print_log_every=100, verbose=True, use_cuda=True):
-        super().__init__(use_cuda)
-        self.print_log_every = print_log_every
-        self.verbose = verbose
-
-    def on_batch_end(self, batch_index, batch_logs=None):
-        super().on_batch_end(batch_index, batch_logs)
-        if self.verbose and batch_index % self.print_log_every == 0:
-            print('[iter{}] loss: {}, train_acc: {}'.format(LOGGER.get('tot_num_iterations'), LOGGER.get('mean_loss'), LOGGER.get('mean_acc_train')))
-
-class MetricsNeptune(MetricsCallback):
-    def __init__(self, neptune_log_text, send_metric_to_neptune_every=5, use_cuda=True):
-        self.send_metric_to_neptune_every = send_metric_to_neptune_every
-        self.neptune_log_text = neptune_log_text
-        super().__init__(use_cuda)
-
-    def on_batch_end(self, batch_index, batch_logs=None):
-        super().on_batch_end(batch_index, batch_logs)
-        if batch_index % self.send_metric_to_neptune_every == self.send_metric_to_neptune_every - 1 and self.use_cuda:
-            neptune.send_metric('{} / Mean Running Loss '.format(self.neptune_log_text), LOGGER.get('mean_loss'))
-            neptune.send_metric('{} / Mean Train Accuracy train'.format(self.neptune_log_text), LOGGER.get('mean_acc_train'))
 
 def gradient_step(model: Module, optimiser: Optimizer, loss_fn: Callable, x: torch.Tensor, y: torch.Tensor, **kwargs):
     """Takes a single gradient step.
@@ -262,8 +194,6 @@ def matching_net_step(x, y, model, loss_fn, optimizer, use_cuda, train, n_shot, 
 
 def train_net(train_loader, use_cuda, num_classes, net, params_to_update, max_iterations, log_text='', stop_when_train_acc_is=200, callbacks: List[Callback] = None, use_early_stopping=True, verbose=True, learning_rate=0.0001, loss_fn=None, training_step=None, training_step_kwargs={}):
     torch.cuda.empty_cache()
-    # if use_early_stopping:
-    #     es = EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max', reaching_goal=stop_when_train_acc_is)
 
     if params_to_update is None:
         params_to_update = net.parameters()
@@ -293,18 +223,16 @@ def train_net(train_loader, use_cuda, num_classes, net, params_to_update, max_it
 
     callbacks.on_train_begin()
 
-    ## Train Network
-    # stop_running = False
-
     start = time()
     # confusion_matrix = torch.zeros(num_classes, num_classes)
-    LOGGER.add_log(Log(name='stop_training', init_value=False))
 
+    tot_iter = 0
     for epoch in range(20):
         epoch_logs = {}
         callbacks.on_epoch_begin(epoch)
         print('epoch: {}'.format(epoch))
         for batch_index, data in enumerate(train_loader, 0):
+            tot_iter += 1
             callbacks.on_batch_begin(batch_index)
 
             if batch_index % 100 == 100 - 1:
@@ -316,17 +244,14 @@ def train_net(train_loader, use_cuda, num_classes, net, params_to_update, max_it
             loss, y_true, y_pred, logs = training_step(x, y, net, loss_fn, optimizer, use_cuda, **training_step_kwargs)
 
             # batch_logs = batch_metrics(net, predicted, labels, metrics, batch_logs)
-            batch_logs = {'y_pred': y_pred, 'loss': loss, 'y_true': y_true, **logs}
-            LOGGER.next_index(batch_logs)
+            batch_logs = {'y_pred': y_pred, 'loss': loss, 'y_true': y_true, 'tot_iter': tot_iter, 'stop': False,
+                          **logs}
+            # LOGGER.next_index(batch_logs)
 
             callbacks.on_batch_end(batch_index, batch_logs)
 
-            if LOGGER.get('stop_training') == True:
+            if batch_logs['stop']:
                 break
-
-
-
-
 
             # callbacks.check_stop(batch_index, batch_logs)
 
@@ -387,7 +312,7 @@ def train_net(train_loader, use_cuda, num_classes, net, params_to_update, max_it
         #     if verbose:
         #         print('Reached early stopping')
         #     break
-        if LOGGER.get('stop_training') == True:
+        if batch_logs['stop']:
             break
     callbacks.on_train_end(batch_logs)
     print('Finished Training')

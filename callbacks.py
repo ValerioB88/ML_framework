@@ -9,7 +9,7 @@ import warnings
 import os
 import csv
 import io
-
+import neptune
 from few_shot.eval import evaluate
 
 
@@ -486,6 +486,119 @@ class ModelCheckpoint(Callback):
                     print('\nEpoch %05d: saving model to %s' % (epoch + 1, filepath))
                 torch.save(self.model.state_dict(), filepath)
 
+import torch
+
+
+class Metrics(Callback):
+    def __init__(self, use_cuda, log_every):
+        self.use_cuda = use_cuda
+        self.log_every = log_every
+        self.init_classic_logs()
+
+    def update_classic_logs(self, batch_logs):
+        self.correct_train += ((batch_logs['y_pred'].cuda() if self.use_cuda else batch_logs['y_pred']) ==
+                               (batch_logs['y_true'].cuda() if self.use_cuda else batch_logs['y_true'])).sum().item()
+        self.total_samples += batch_logs['y_true'].size(0)
+        self.running_loss += batch_logs['loss']
+
+    def compute_mean_loss_acc(self):
+        mean_loss = self.running_loss / self.log_every
+        mean_acc = 100 * self.correct_train / self.total_samples
+        return mean_loss, mean_acc
+
+    def init_classic_logs(self):
+        self.correct_train, self.total_samples, self.running_loss, self.mean_loss, self.mean_acc = 0, 0, 0, 0, 0
+
+
+class EarlyStopping(Callback):
+    def __init__(self, mode='min', min_delta=0, patience=10, percentage=False, reaching_goal=None, metric_name='mean_acc'):
+        self.mode = mode  # mode refers to what are you trying to reach.
+        self.min_delta = min_delta
+        self.patience = patience
+        self.best = None
+        self.num_bad_epochs = 0
+        self.is_better = None
+        self._init_is_better(mode, min_delta, percentage)
+        self.reaching_goal = reaching_goal
+        self.metric_name = metric_name
+        # reaching goal: if the metric stays higher/lower (max/min) than the goal for patience steps
+        if reaching_goal is not None:
+            self.best = reaching_goal
+            # self.mode = 'min'
+
+        if patience == 0:
+            self.is_better = lambda a, b: True
+            self.step = lambda a: False
+
+    def on_batch_end(self, batch, logs=None):
+        metrics = logs[self.metric_name]
+        if self.best is None:
+            self.best = metrics
+            return False
+
+        if np.isnan(metrics):
+            return True
+        if self.reaching_goal is not None:
+            if self.is_better(metrics, self.best):
+                self.num_bad_epochs += 1
+            else:
+                self.num_bad_epochs = 0
+        else:
+            if self.is_better(metrics, self.best):
+                self.num_bad_epochs = 0  # bad epochs: does not 'improve'
+                self.best = metrics
+            else:
+                self.num_bad_epochs += 1
+
+        if self.num_bad_epochs >= self.patience:
+            logs['stop'] = True
+
+
+    def _init_is_better(self, mode, min_delta, percentage):
+        if mode not in {'min', 'max'}:
+            raise ValueError('mode ' + mode + ' is unknown!')
+        if not percentage:
+            if mode == 'min':
+                self.is_better = lambda a, best: a < best - min_delta
+            if mode == 'max':
+                self.is_better = lambda a, best: a > best + min_delta
+        else:
+            if mode == 'min':
+                self.is_better = lambda a, best: a < best - (
+                            best * min_delta / 100)
+            if mode == 'max':
+                self.is_better = lambda a, best: a > best + (
+                            best * min_delta / 100)
+
+
+class StandardMetrics(Metrics):
+    def __init__(self, log_every=100, verbose=True, use_cuda=True):
+        super().__init__(use_cuda, log_every)
+        self.verbose = verbose
+
+
+    def on_batch_end(self, batch_index, batch_logs=None):
+        super().on_batch_end(batch_index, batch_logs)
+        self.update_classic_logs(batch_logs)
+        if self.verbose and batch_index % self.log_every == 0:
+            mean_loss, mean_acc = self.compute_mean_loss_acc()
+            print('[iter{}] loss: {}, train_acc: {}'.format(batch_logs['tot_iter'], mean_loss, mean_acc))
+            self.init_classic_logs()
+
+
+
+class MetricsNeptune(Metrics):
+    def __init__(self, neptune_log_text, log_every=5, use_cuda=True):
+        super().__init__(use_cuda, log_every)
+        self.neptune_log_text = neptune_log_text
+
+    def on_batch_end(self, batch_index, batch_logs=None):
+        self.update_classic_logs(batch_logs)
+        if batch_index % self.log_every == 0:
+            mean_loss, mean_acc = self.compute_mean_loss_acc()
+            neptune.send_metric('{} / Mean Running Loss '.format(self.neptune_log_text), mean_loss)
+            neptune.send_metric('{} / Mean Train Accuracy train'.format(self.neptune_log_text), mean_acc)
+            self.init_classic_logs()
 
 class LearningRateScheduler(Callback):
     """Learning rate scheduler.

@@ -10,7 +10,8 @@ import glob
 from models.FCnets import FC4
 from enum import Enum
 import re
-from train_net import MetricsCallback, MetricsNeptune, train_net, StandardMetrics
+from callbacks import MetricsNeptune, StandardMetrics, EarlyStopping
+from train_net import train_net
 
 class TypeNet(Enum):
     VGG = 0
@@ -42,15 +43,16 @@ class Experiment():
         self.force_server = PARAMS['force_server']
         self.additional_tags = PARAMS['additional_tags']
         self.size_object = PARAMS['size_object']
+        self.use_neptune = PARAMS['use_neptune']
         if self.size_object == '0':
             self.size_object = None
         self.experiment_data = {self.current_run: {'training_loaders': [],
                                                    'testing_loaders': []}}
 
-        self.is_server = self.force_server
+        self.use_cuda = self.force_server
         if torch.cuda.is_available():
             print('Using cuda - you are probably on the server')
-            self.is_server = True
+            self.use_cuda = True
 
         list_tags = [name_experiment]
         if self.additional_tags is not None:
@@ -69,10 +71,10 @@ class Experiment():
         else:
             list_tags.append('orsize')
 
-        self.batch_size = 32 if self.is_server else 4
+        self.batch_size = 32 if self.use_cuda else 4
         self.size_canvas = (224, 224) if not self.big_canvas else (400, 400)
         if self.max_iterations is None:
-            self.max_iterations = 5000 if self.is_server else 10
+            self.max_iterations = 5000 if self.use_cuda else 10
 
         self.finalize_init(PARAMS, list_tags)
 
@@ -85,45 +87,44 @@ class Experiment():
 
     def finalize_init(self, PARAMS, list_tags):
         print(PARAMS)
-        self.initialize_neptune(PARAMS, list_tags)
+        self.initialize_neptune(PARAMS, list_tags) if self.use_neptune else None
 
     def initialize_neptune(self, PARAMS, list_tags):
-        if self.is_server:
-            neptune.init('valeriobiscione/valerioERC')
-            try:
-                neptune.create_experiment(name='',
-                                          params=PARAMS,
-                                          # description='\n'.join([str(k) + ': ' + str(v) for k, v in PARAMS.items()]),
-                                          tags=list_tags)
-            except BaseException as e:
-                print(e)
+        neptune.init('valeriobiscione/valerioERC')
+        try:
+            neptune.create_experiment(name='',
+                                      params=PARAMS,
+                                      # description='\n'.join([str(k) + ': ' + str(v) for k, v in PARAMS.items()]),
+                                      tags=list_tags)
+        except BaseException as e:
+            print(e)
 
     def neptune_plot_generators_info(self, train_loader=None, test_loaders_list=None):
-        if self.is_server:
-            if train_loader is not None:
-                utils.neptune_log_dataset_info(train_loader, log_text='training')
-            if test_loaders_list is not None:
-                for loader in test_loaders_list:
-                    utils.neptune_log_dataset_info(loader, log_text='testing')
+        if train_loader is not None:
+            utils.neptune_log_dataset_info(train_loader, log_text='training')
+        if test_loaders_list is not None:
+            for loader in test_loaders_list:
+                utils.neptune_log_dataset_info(loader, log_text='testing')
 
     def get_net(self, network_name, num_classes, pretraining, grayscale=False):
-        net, params_to_update = self.prepare_network(network_name, num_classes=num_classes, is_server=self.is_server, grayscale=grayscale, use_gap=self.use_gap, feature_extraction=self.feature_extraction, pretraining=pretraining, big_canvas=self.big_canvas, shallow_FC=self.shallow_FC)
+        net, params_to_update = self.prepare_network(network_name, num_classes=num_classes, is_server=self.use_cuda, grayscale=grayscale, use_gap=self.use_gap, feature_extraction=self.feature_extraction, pretraining=pretraining, big_canvas=self.big_canvas, shallow_FC=self.shallow_FC)
         return net, params_to_update
 
     def call_train_net(self, train_loader, net, params_to_update, log_text, callbacks):
-        return train_net(train_loader, use_cuda=self.is_server, num_classes=train_loader.dataset.num_classes, net=net, params_to_update=params_to_update, max_iterations=self.max_iterations, log_text=log_text, stop_when_train_acc_is=self.stop_when_train_acc_is, callbacks=callbacks, learning_rate=self.learning_rate)
+        return train_net(train_loader, use_cuda=self.use_cuda, num_classes=train_loader.dataset.num_classes, net=net, params_to_update=params_to_update, max_iterations=self.max_iterations, log_text=log_text, stop_when_train_acc_is=self.stop_when_train_acc_is, callbacks=callbacks, learning_rate=self.learning_rate)
 
     def train(self, train_loader, callbacks=None, log_text='train'):
         self.experiment_data[self.current_run]['training_loaders'].append(train_loader)
         net, params_to_update = self.get_net(self.network_name, num_classes=train_loader.dataset.num_classes, pretraining=self.pretraining, grayscale=train_loader.dataset.grayscale)
-        callbacks = [MetricsNeptune(neptune_log_text=log_text, send_metric_to_neptune_every=5, use_cuda=self.is_server),
-                     StandardMetrics(print_log_every=100, verbose=True, use_cuda=self.is_server)]
+        callbacks = [StandardMetrics(log_every=100, verbose=True, use_cuda=self.use_cuda)]
+                     # EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max', reaching_goal=100, metric_name='mean_acc')]
+        callbacks.append(MetricsNeptune(neptune_log_text=log_text, log_every=5, use_cuda=self.use_cuda)) if self.use_neptune else None
         # partial(compute_validation, cuda=is_server, log_text='valid', valid_loader=valid_loader, max_iter=32 if is_server is True else 2, plot_nept_graph_every=np.Inf, verbose=False)
 
         net = self.call_train_net(train_loader, net, params_to_update, log_text, callbacks)
 
         # ToDo: this could be a callback too
-        if self.is_server and self.model_output_filename is not None:
+        if self.use_cuda and self.model_output_filename is not None:
             pathlib.Path(os.path.dirname(self.model_output_filename)).mkdir(parents=True, exist_ok=True)
             print('Saving model in {}'.format(self.model_output_filename))
             torch.save(net.state_dict(), self.model_output_filename)
@@ -140,7 +141,7 @@ class Experiment():
         self.experiment_data[self.current_run]['testing_loaders'].append(test_loaders_list)
 
         save_dataframe = True if self.output_filename is not None else False
-        df_testing, conf_mat, accuracy = utils.test_loader_and_save(test_loaders_list, save_dataframe, net, self.is_server, self.network_name, self.num_iterations_testing, log_text=log_text)
+        df_testing, conf_mat, accuracy = utils.test_loader_and_save(test_loaders_list, save_dataframe, net, self.use_cuda, self.network_name, self.num_iterations_testing, log_text=log_text)
         self.finalize_test(df_testing, conf_mat, accuracy)
 
     def save_all_runs(self):
@@ -285,7 +286,7 @@ class Experiment():
         if pretraining != 'vanilla':
             if pretraining == 'ImageNet':
                 pretrain_path = glob.glob('./models/ImageNet_{}*.pickle'.format(network))
-                assert len(pretrain_path) > 1, 'Found multiple matches for the pretraining network ImageNet {}'.format(network)
+                assert len(pretrain_path) <= 1, 'Found multiple matches for the pretraining network ImageNet {}'.format(network)
                 pretrain_path = pretrain_path[0]
             else:
                 pretrain_path = pretraining
