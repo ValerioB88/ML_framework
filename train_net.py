@@ -130,7 +130,7 @@ def fit(model: Module, optimiser: Optimizer, loss_fn: Callable, epochs: int, dat
 
 
 
-def standard_net_step(images, labels, model, loss_fn, optimizer, use_cuda, train=True, **kwargs):
+def standard_net_step(images, labels, model, loss_fn, optimizer, use_cuda, train):
     logs = {}
     if train:
         model.train()
@@ -192,21 +192,24 @@ def matching_net_step(x, y, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     return loss, y, predicted, logs
 
 
-def train_net(train_loader, use_cuda, num_classes, net, params_to_update, max_iterations, log_text='', stop_when_train_acc_is=200, callbacks: List[Callback] = None, use_early_stopping=True, verbose=True, learning_rate=0.0001, loss_fn=None, training_step=None, training_step_kwargs={}):
+def train_net(train_loader, use_cuda, net, params_to_update, max_iterations, callbacks: List[Callback] = None, verbose=True, optimizer=None, loss_fn=None, training_step=None, training_step_kwargs={}):
     torch.cuda.empty_cache()
 
     if params_to_update is None:
         params_to_update = net.parameters()
+
     if training_step is None:
         training_step = standard_net_step
 
     if loss_fn is None:
         loss_fn = torch.nn.CrossEntropyLoss().cuda() if use_cuda else torch.nn.CrossEntropyLoss()
 
+    if optimizer is None:
+        optimizer = torch.optim.Adam(params_to_update, lr=0.0001)
+
     if use_cuda:
         net.cuda()
 
-    optimizer = torch.optim.Adam(params_to_update, lr=learning_rate)
     callbacks = CallbackList(callbacks)
 
     # callbacks = CallbackList([DefaultCallback(), ] + (callbacks or []) + [ProgressBarLogger(), ])

@@ -10,7 +10,7 @@ import glob
 from models.FCnets import FC4
 from enum import Enum
 import re
-from callbacks import MetricsNeptune, StandardMetrics, EarlyStopping
+from callbacks import MetricsNeptune, StandardMetrics, EarlyStopping, SaveModel
 from train_net import train_net
 
 class TypeNet(Enum):
@@ -110,28 +110,21 @@ class Experiment():
         net, params_to_update = self.prepare_network(network_name, num_classes=num_classes, is_server=self.use_cuda, grayscale=grayscale, use_gap=self.use_gap, feature_extraction=self.feature_extraction, pretraining=pretraining, big_canvas=self.big_canvas, shallow_FC=self.shallow_FC)
         return net, params_to_update
 
-    def call_train_net(self, train_loader, net, params_to_update, log_text, callbacks):
-        return train_net(train_loader, use_cuda=self.use_cuda, num_classes=train_loader.dataset.num_classes, net=net, params_to_update=params_to_update, max_iterations=self.max_iterations, log_text=log_text, stop_when_train_acc_is=self.stop_when_train_acc_is, callbacks=callbacks, learning_rate=self.learning_rate)
+    def call_train_net(self, train_loader, net, params_to_update, log_text, optimizer=None, callbacks=None):
+        return train_net(train_loader, use_cuda=self.use_cuda, net=net, params_to_update=params_to_update, max_iterations=self.max_iterations, callbacks=callbacks, optimizer=optimizer, training_step=standard_net_step, training_step_kwargs={'train': True})
 
     def train(self, train_loader, callbacks=None, log_text='train'):
         self.experiment_data[self.current_run]['training_loaders'].append(train_loader)
         net, params_to_update = self.get_net(self.network_name, num_classes=train_loader.dataset.num_classes, pretraining=self.pretraining, grayscale=train_loader.dataset.grayscale)
+
         nept_log = 5
         std_log = 100
         callbacks = [StandardMetrics(log_every=std_log, verbose=True, use_cuda=self.use_cuda),
-                     EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max', reaching_goal=100, metric_name='nept/mean_acc' if self.use_neptune else 'std/mean_acc', check_every=nept_log if self.use_neptune else std_log)]
+                     EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max', reaching_goal=self.stop_when_train_acc_is, metric_name='nept/mean_acc' if self.use_neptune else 'std/mean_acc', check_every=nept_log if self.use_neptune else std_log),
+                     SaveModel(net, self.model_output_filename)] #+ (callbacks or None)
         callbacks.append(MetricsNeptune(neptune_log_text=log_text, log_every=nept_log, use_cuda=self.use_cuda)) if self.use_neptune else None
-        # partial(compute_validation, cuda=is_server, log_text='valid', valid_loader=valid_loader, max_iter=32 if is_server is True else 2, plot_nept_graph_every=np.Inf, verbose=False)
 
-        net = self.call_train_net(train_loader, net, params_to_update, log_text, callbacks)
-
-        # ToDo: this could be a callback too
-        if self.use_cuda and self.model_output_filename is not None:
-            pathlib.Path(os.path.dirname(self.model_output_filename)).mkdir(parents=True, exist_ok=True)
-            print('Saving model in {}'.format(self.model_output_filename))
-            torch.save(net.state_dict(), self.model_output_filename)
-            neptune.log_artifact(self.model_output_filename, self.model_output_filename)
-
+        net = self.call_train_net(train_loader, net, params_to_update, log_text, callbacks=callbacks)
         return net
 
     def finalize_test(self, df_testing, conf_mat, accuracy):

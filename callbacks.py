@@ -11,7 +11,7 @@ import csv
 import io
 import neptune
 from few_shot.eval import evaluate
-
+import pathlib
 
 class CallbackList(object):
     """Container abstracting a list of callbacks.
@@ -520,7 +520,7 @@ class Metrics(Callback):
         return mean_loss, mean_acc
 
     def init_classic_logs(self):
-        self.correct_train, self.total_samples, self.running_loss = 0, 0, 0, 0, 0
+        self.correct_train, self.total_samples, self.running_loss = 0, 0, 0
 
 
 class EarlyStopping(Callback):
@@ -544,6 +544,7 @@ class EarlyStopping(Callback):
             self.is_better = lambda a, b: True
             self.step = lambda a: False
         print(f'Set up early stopping with metric [{self.metric_name}] < {self.reaching_goal}, checking every [{self.check_every}], patience [{patience}]')
+
     def on_batch_end(self, batch, logs=None):
         if batch % self.check_every == 0:
             metrics = logs[self.metric_name]
@@ -585,6 +586,17 @@ class EarlyStopping(Callback):
                 self.is_better = lambda a, best: a > best + (
                             best * min_delta / 100)
 
+class SaveModel(Callback):
+    def __init__(self, net, output_path):
+        self.output_path = output_path
+        self.net = net
+
+    def on_train_end(self, logs=None):
+        if self.output_path is not None:
+            pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
+            print('Saving model in {}'.format(self.output_path))
+            torch.save(self.net.state_dict(), self.output_path)
+            neptune.log_artifact(self.output_path, self.output_path)
 
 class StandardMetrics(Metrics):
     def __init__(self, log_every=100, verbose=True, use_cuda=True):
