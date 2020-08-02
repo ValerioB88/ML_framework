@@ -1,7 +1,7 @@
 import utils
 import torch
 import neptune
-from train_with_generators import train_net, standard_net_step
+from train_with_generators import standard_net_step
 import torchvision
 import pathlib
 import os
@@ -10,14 +10,13 @@ import glob
 from models.FCnets import FC4
 from enum import Enum
 import re
-
+from train_net import MetricsCallback, MetricsNeptune, train_net, StandardMetrics
 
 class TypeNet(Enum):
     VGG = 0
     FC = 1
     RESNET = 2
     OTHER = 3
-
 
 class Experiment():
     def __init__(self, name_experiment='default_name', parser=None,):
@@ -111,16 +110,19 @@ class Experiment():
         net, params_to_update = self.prepare_network(network_name, num_classes=num_classes, is_server=self.is_server, grayscale=grayscale, use_gap=self.use_gap, feature_extraction=self.feature_extraction, pretraining=pretraining, big_canvas=self.big_canvas, shallow_FC=self.shallow_FC)
         return net, params_to_update
 
-    def call_train_net(self, train_loader, net, params_to_update, log_text, callback):
-        return train_net(train_loader, use_cuda=self.is_server, num_classes=train_loader.dataset.num_classes, net=net, params_to_update=params_to_update, max_iterations=self.max_iterations, log_text=log_text, stop_when_train_acc_is=self.stop_when_train_acc_is, callback=callback, learning_rate=self.learning_rate)
+    def call_train_net(self, train_loader, net, params_to_update, log_text, callbacks):
+        return train_net(train_loader, use_cuda=self.is_server, num_classes=train_loader.dataset.num_classes, net=net, params_to_update=params_to_update, max_iterations=self.max_iterations, log_text=log_text, stop_when_train_acc_is=self.stop_when_train_acc_is, callbacks=callbacks, learning_rate=self.learning_rate)
 
-    def train(self, train_loader, log_text='train'):
+    def train(self, train_loader, callbacks=None, log_text='train'):
         self.experiment_data[self.current_run]['training_loaders'].append(train_loader)
         net, params_to_update = self.get_net(self.network_name, num_classes=train_loader.dataset.num_classes, pretraining=self.pretraining, grayscale=train_loader.dataset.grayscale)
-        callback = None  # partial(compute_validation, cuda=is_server, log_text='valid', valid_loader=valid_loader, max_iter=32 if is_server is True else 2, plot_nept_graph_every=np.Inf, verbose=False)
+        callbacks = [MetricsNeptune(neptune_log_text=log_text, send_metric_to_neptune_every=5, use_cuda=self.is_server),
+                     StandardMetrics(print_log_every=100, verbose=True, use_cuda=self.is_server)]
+        # partial(compute_validation, cuda=is_server, log_text='valid', valid_loader=valid_loader, max_iter=32 if is_server is True else 2, plot_nept_graph_every=np.Inf, verbose=False)
 
-        net = self.call_train_net(train_loader, net, params_to_update, log_text, callback)
+        net = self.call_train_net(train_loader, net, params_to_update, log_text, callbacks)
 
+        # ToDo: this could be a callback too
         if self.is_server and self.model_output_filename is not None:
             pathlib.Path(os.path.dirname(self.model_output_filename)).mkdir(parents=True, exist_ok=True)
             print('Saving model in {}'.format(self.model_output_filename))
