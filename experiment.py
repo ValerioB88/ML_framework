@@ -116,9 +116,11 @@ class Experiment():
     def train(self, train_loader, callbacks=None, log_text='train'):
         self.experiment_data[self.current_run]['training_loaders'].append(train_loader)
         net, params_to_update = self.get_net(self.network_name, num_classes=train_loader.dataset.num_classes, pretraining=self.pretraining, grayscale=train_loader.dataset.grayscale)
-        callbacks = [StandardMetrics(log_every=100, verbose=True, use_cuda=self.use_cuda)]
-                     # EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max', reaching_goal=100, metric_name='mean_acc')]
-        callbacks.append(MetricsNeptune(neptune_log_text=log_text, log_every=5, use_cuda=self.use_cuda)) if self.use_neptune else None
+        nept_log = 5
+        std_log = 100
+        callbacks = [StandardMetrics(log_every=std_log, verbose=True, use_cuda=self.use_cuda),
+                     EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max', reaching_goal=100, metric_name='nept/mean_acc' if self.use_neptune else 'std/mean_acc', check_every=nept_log if self.use_neptune else std_log)]
+        callbacks.append(MetricsNeptune(neptune_log_text=log_text, log_every=nept_log, use_cuda=self.use_cuda)) if self.use_neptune else None
         # partial(compute_validation, cuda=is_server, log_text='valid', valid_loader=valid_loader, max_iter=32 if is_server is True else 2, plot_nept_graph_every=np.Inf, verbose=False)
 
         net = self.call_train_net(train_loader, net, params_to_update, log_text, callbacks)

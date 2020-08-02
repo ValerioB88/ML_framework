@@ -211,15 +211,15 @@ def train_net(train_loader, use_cuda, num_classes, net, params_to_update, max_it
 
     # callbacks = CallbackList([DefaultCallback(), ] + (callbacks or []) + [ProgressBarLogger(), ])
     # callbacks.set_model(net)
-    # callbacks.set_params({
-    #     'num_batches': max_iterations,
+    callbacks.set_params({
+        'num_batches': max_iterations,
         # 'batch_size': batch_size,
-        # 'verbose': verbose,
+        'verbose': verbose,
         # 'metrics': (metrics or []),
         # 'prepare_batch': prepare_batch,
-        # 'loss_fn': loss_fn,
-        # 'optimiser': optimizer
-    # })
+        'loss_fn': loss_fn,
+        'optimiser': optimizer
+    })
 
     callbacks.on_train_begin()
 
@@ -247,7 +247,7 @@ def train_net(train_loader, use_cuda, num_classes, net, params_to_update, max_it
             batch_logs = {'y_pred': y_pred, 'loss': loss, 'y_true': y_true, 'tot_iter': tot_iter, 'stop': False,
                           **logs}
             # LOGGER.next_index(batch_logs)
-
+            callbacks.on_training_step_end(batch_index, batch_logs)
             callbacks.on_batch_end(batch_index, batch_logs)
 
             if batch_logs['stop']:
