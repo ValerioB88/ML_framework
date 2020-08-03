@@ -10,7 +10,7 @@ from typing import Callable, List, Union
 from time import time
 from callbacks import DefaultCallback, ProgressBarLogger, CallbackList, Callback
 from external.few_shot.few_shot.matching import matching_net_predictions, pairwise_distances, clip_grad_norm_
-
+from framework_utils import make_cuda
 # from metrics import NAMED_METRICS
 # from logger import LOGGER, Log
 import neptune
@@ -142,9 +142,9 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
         model.eval()
 
     optimizer.zero_grad()
-    output_batch = model(images.cuda() if use_cuda else images)
-    loss = loss_fn(output_batch.cuda() if use_cuda else output_batch,
-                   labels.cuda() if use_cuda else labels)
+    output_batch = model(make_cuda(images, use_cuda))
+    loss = loss_fn(make_cuda(output_batch, use_cuda),
+                   make_cuda(labels, use_cuda))
     max_output, predicted = torch.max(output_batch, 1)
     if train:
         loss.backward()
@@ -160,7 +160,7 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         optimizer.zero_grad()
     else:
         model.eval()
-    embeddings = model.encoder(x.cuda() if use_cuda else x)
+    embeddings = model.encoder(make_cuda(x, use_cuda))
     y = torch.arange(0, k_way, 1 / q_queries).long()
 
     # Samples are ordered by the NShotWrapper class as follows:
@@ -184,7 +184,7 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     _, predicted = torch.max(y_pred, 1)
 
     # CrossEntropy is log softmax + NLLLoss. Here we do them separately.
-    loss = loss_fn(clipped_y_pred.log().cuda() if use_cuda else clipped_y_pred.log(), y.cuda() if use_cuda else y)
+    loss = loss_fn(make_cuda(clipped_y_pred.log(), use_cuda), make_cuda(y, use_cuda))
 
     if train:
         loss.backward()
@@ -195,30 +195,20 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     return loss, y, predicted, logs
 
 
-def train_net(train_loader, use_cuda, net, params_to_update, max_iterations, callbacks: List[Callback] = None, verbose=True, optimizer=None, loss_fn=None, training_step=None, training_step_kwargs={}):
+def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, verbose=True, optimizer=None, loss_fn=None, training_step=standard_net_step, training_step_kwargs=None):
     torch.cuda.empty_cache()
 
-    if params_to_update is None:
-        params_to_update = net.parameters()
+    if training_step_kwargs is None:
+        training_step_kwargs = {}
 
-    if training_step is None:
-        training_step = standard_net_step
-
-    if loss_fn is None:
-        loss_fn = torch.nn.CrossEntropyLoss().cuda() if use_cuda else torch.nn.CrossEntropyLoss()
-
-    if optimizer is None:
-        optimizer = torch.optim.Adam(params_to_update, lr=0.0001)
-
-    if use_cuda:
-        net.cuda()
+    make_cuda(net, use_cuda)
 
     callbacks = CallbackList(callbacks)
 
     # callbacks = CallbackList([DefaultCallback(), ] + (callbacks or []) + [ProgressBarLogger(), ])
     # callbacks.set_model(net)
     callbacks.set_params({
-        'num_batches': max_iterations,
+        # 'num_batches': max_iterations,
         # 'batch_size': batch_size,
         'verbose': verbose,
         # 'metrics': (metrics or []),

@@ -586,6 +586,17 @@ class EarlyStopping(Callback):
                 self.is_better = lambda a, best: a > best + (
                             best * min_delta / 100)
 
+class StopWhenMetricIs(Callback):
+    def __init__(self, value_to_reach, metric_name):
+        self.value_to_reach = value_to_reach
+        self.metric_name = metric_name
+        super().__init__()
+
+    def on_batch_end(self, batch, logs=None):
+        if logs[self.metric_name] > self.value_to_reach:
+            logs['stop'] = True
+
+
 class SaveModel(Callback):
     def __init__(self, net, output_path):
         self.output_path = output_path
