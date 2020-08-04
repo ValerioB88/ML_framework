@@ -142,7 +142,7 @@ class Experiment(ABC):
         net, logs = self.call_run(train_loader, net, params_to_update, train=True, callbacks=all_cb)
         return net
 
-    def finalize_test(self, df_testing, conf_mat, accuracy, save_dataframe):
+    def finalize_test(self, df_testing, conf_mat, accuracy):
         self.experiment_data[self.current_run]['df_testing'] = df_testing
         self.experiment_data[self.current_run]['conf_mat_acc'] = conf_mat
         self.experiment_data[self.current_run]['accuracy'] = accuracy
@@ -158,7 +158,9 @@ class Experiment(ABC):
         all_cb += ([ComputeDataframe(num_classes, self.use_cuda, translation_type_str, self.network_name, plot_density=True, log_text_plot=log_text)] if save_dataframe else [])
         return all_cb
 
-    def test(self, net, test_loaders_list, callbacks=None, log_text=''):
+    from typing import Dict, List, Callable, Union
+
+    def test(self, net, test_loaders_list, callbacks=None, log_text: List[str] = None):
         self.experiment_data[self.current_run]['testing_loaders'].append(test_loaders_list)
         save_dataframe = True if self.output_filename is not None else False
 
@@ -167,14 +169,15 @@ class Experiment(ABC):
 
         print('Running the tests')
         df_testing = pd.DataFrame([])
-        for testing_loader in test_loaders_list:
-            all_cb = self.prepare_test_callbacks(testing_loader.dataset.num_classes, log_text, testing_loader.dataset.translation_type_str, save_dataframe)
+        for idx, testing_loader in enumerate(test_loaders_list):
+            all_cb = self.prepare_test_callbacks(testing_loader.dataset.num_classes, log_text[idx] if log_text is not None else '', testing_loader.dataset.translation_type_str, save_dataframe)
             all_cb += (callbacks or [])
 
             net, logs = self.call_run(testing_loader, net, params_to_update=net.parameters(), train=False, callbacks=all_cb)
             conf_mat_acc_all_tests.append(logs['conf_mat_acc'])
             accuracy_all_tests.append(logs['total_accuracy'])
-            df_testing = pd.concat((df_testing, logs['dataframe']))
+            if save_dataframe:
+                df_testing = pd.concat((df_testing, logs['dataframe']))
 
             self.finalize_test(df_testing, logs['conf_mat_acc'], logs['total_accuracy'])
 

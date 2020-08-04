@@ -56,79 +56,79 @@ def gradient_step(model: Module, optimiser: Optimizer, loss_fn: Callable, x: tor
 #     return batch_logs
 
 
-def fit(model: Module, optimiser: Optimizer, loss_fn: Callable, epochs: int, dataloader: DataLoader,
-        prepare_batch: Callable, metrics: List[Union[str, Callable]] = None, callbacks: List[Callback] = None,
-        verbose: bool =True, fit_function: Callable = gradient_step, fit_function_kwargs: dict = {}):
-    """Function to abstract away training loop.
-
-    The benefit of this function is that allows training scripts to be much more readable and allows for easy re-use of
-    common training functionality provided they are written as a subclass of voicemap.Callback (following the
-    Keras API).
-
-    # Arguments
-        model: Model to be fitted.
-        optimiser: Optimiser to calculate gradient step from loss
-        loss_fn: Loss function to calculate between predictions and outputs
-        epochs: Number of epochs of fitting to be performed
-        dataloader: `torch.DataLoader` instance to fit the model to
-        prepare_batch: Callable to perform any desired preprocessing
-        metrics: Optional list of metrics to evaluate the model with
-        callbacks: Additional functionality to incorporate into training such as logging metrics to csv, model
-            checkpointing, learning rate scheduling etc... See voicemap.callbacks for more.
-        verbose: All print output is muted if this argument is `False`
-        fit_function: Function for calculating gradients. Leave as default for simple supervised training on labelled
-            batches. For more complex training procedures (meta-learning etc...) you will need to write your own
-            fit_function
-        fit_function_kwargs: Keyword arguments to pass to `fit_function`
-    """
-    # Determine number of samples:
-    num_batches = len(dataloader)
-    batch_size = dataloader.batch_size
-
-    callbacks = CallbackList([DefaultCallback(), ] + (callbacks or []) + [ProgressBarLogger(), ])
-    callbacks.set_model(model)
-    callbacks.set_params({
-        'num_batches': num_batches,
-        'batch_size': batch_size,
-        'verbose': verbose,
-        'metrics': (metrics or []),
-        'prepare_batch': prepare_batch,
-        'loss_fn': loss_fn,
-        'optimiser': optimiser
-    })
-
-    if verbose:
-        print('Begin training...')
-
-    callbacks.on_train_begin()
-
-    for epoch in range(1, epochs+1):
-        callbacks.on_epoch_begin(epoch)
-
-        epoch_logs = {}
-        for batch_index, batch in enumerate(dataloader):
-            batch_logs = dict(batch=batch_index, size=(batch_size or 1))
-
-            callbacks.on_batch_begin(batch_index, batch_logs)
-
-            x, y = prepare_batch(batch)
-
-            loss, y_pred = fit_function(model, optimiser, loss_fn, x, y, **fit_function_kwargs)
-            batch_logs['loss'] = loss.item()
-
-            # Loops through all metrics
-            batch_logs = batch_metrics(model, y_pred, y, metrics, batch_logs)
-
-            callbacks.on_batch_end(batch_index, batch_logs)
-
-        # Run on epoch end
-        callbacks.on_epoch_end(epoch, epoch_logs)
-
-    # Run on train end
-    if verbose:
-        print('Finished.')
-
-    callbacks.on_train_end()
+# def fit(model: Module, optimiser: Optimizer, loss_fn: Callable, epochs: int, dataloader: DataLoader,
+#         prepare_batch: Callable, metrics: List[Union[str, Callable]] = None, callbacks: List[Callback] = None,
+#         verbose: bool =True, fit_function: Callable = gradient_step, fit_function_kwargs: dict = {}):
+#     """Function to abstract away training loop.
+#
+#     The benefit of this function is that allows training scripts to be much more readable and allows for easy re-use of
+#     common training functionality provided they are written as a subclass of voicemap.Callback (following the
+#     Keras API).
+#
+#     # Arguments
+#         model: Model to be fitted.
+#         optimiser: Optimiser to calculate gradient step from loss
+#         loss_fn: Loss function to calculate between predictions and outputs
+#         epochs: Number of epochs of fitting to be performed
+#         dataloader: `torch.DataLoader` instance to fit the model to
+#         prepare_batch: Callable to perform any desired preprocessing
+#         metrics: Optional list of metrics to evaluate the model with
+#         callbacks: Additional functionality to incorporate into training such as logging metrics to csv, model
+#             checkpointing, learning rate scheduling etc... See voicemap.callbacks for more.
+#         verbose: All print output is muted if this argument is `False`
+#         fit_function: Function for calculating gradients. Leave as default for simple supervised training on labelled
+#             batches. For more complex training procedures (meta-learning etc...) you will need to write your own
+#             fit_function
+#         fit_function_kwargs: Keyword arguments to pass to `fit_function`
+#     """
+#     # Determine number of samples:
+#     num_batches = len(dataloader)
+#     batch_size = dataloader.batch_size
+#
+#     callbacks = CallbackList([DefaultCallback(), ] + (callbacks or []) + [ProgressBarLogger(), ])
+#     callbacks.set_model(model)
+#     callbacks.set_params({
+#         'num_batches': num_batches,
+#         'batch_size': batch_size,
+#         'verbose': verbose,
+#         'metrics': (metrics or []),
+#         'prepare_batch': prepare_batch,
+#         'loss_fn': loss_fn,
+#         'optimiser': optimiser
+#     })
+#
+#     if verbose:
+#         print('Begin training...')
+#
+#     callbacks.on_train_begin()
+#
+#     for epoch in range(1, epochs+1):
+#         callbacks.on_epoch_begin(epoch)
+#
+#         epoch_logs = {}
+#         for batch_index, batch in enumerate(dataloader):
+#             batch_logs = dict(batch=batch_index, size=(batch_size or 1))
+#
+#             callbacks.on_batch_begin(batch_index, batch_logs)
+#
+#             x, y = prepare_batch(batch)
+#
+#             loss, y_pred = fit_function(model, optimiser, loss_fn, x, y, **fit_function_kwargs)
+#             batch_logs['loss'] = loss.item()
+#
+#             # Loops through all metrics
+#             batch_logs = batch_metrics(model, y_pred, y, metrics, batch_logs)
+#
+#             callbacks.on_batch_end(batch_index, batch_logs)
+#
+#         # Run on epoch end
+#         callbacks.on_epoch_end(epoch, epoch_logs)
+#
+#     # Run on train end
+#     if verbose:
+#         print('Finished.')
+#
+#     callbacks.on_train_end()
 
 
 def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
@@ -144,6 +144,9 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
     output_batch = model(make_cuda(images, use_cuda))
     loss = loss_fn(make_cuda(output_batch, use_cuda),
                    make_cuda(labels, use_cuda))
+    logs['output'] = output_batch
+    logs['more'] = more
+
     max_output, predicted = torch.max(output_batch, 1)
     if train:
         loss.backward()
@@ -230,6 +233,4 @@ def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer
             break
 
     callbacks.on_train_end(batch_logs)
-    print('Finished Training')
-
     return net, batch_logs

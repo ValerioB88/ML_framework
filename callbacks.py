@@ -761,6 +761,7 @@ class PlotTimeElapsed(Callback):
         if batch % self.time_every == 0:
             print('Time Elapsed {} iter: {}'.format(self.time_every, time() - self.start_time))
 
+
 class ComputeDataframe(Callback):
     @staticmethod
     def build_columns(cat_to_save):
