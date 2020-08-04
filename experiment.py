@@ -92,12 +92,42 @@ class Experiment(ABC):
                 utils.neptune_log_dataset_info(loader, log_text='testing')
 
     @abstractmethod
-    def call_train_net(self, train_loader, net, params_to_update, callbacks=None):
+    def call_run(self, train_loader, net, params_to_update, callbacks=None, train=True):
         pass
 
     @abstractmethod
     def get_net(self, network_name, num_classes, pretraining, grayscale):
         return None, None
+
+    def prepare_train_callbacks(self, net, log_text, num_classes):
+        nept_check_every = 5
+        console_check_every = 100
+        all_cb = [StandardMetrics(log_every=nept_check_every, print_it=False,
+                                  use_cuda=self.use_cuda,
+                                  to_neptune=True, log_text=log_text,
+                                  metrics_prefix='nept') if self.use_neptune else [],
+                  StandardMetrics(log_every=console_check_every, print_it=True,
+                                  use_cuda=self.use_cuda,
+                                  to_neptune=False, log_text=log_text,
+                                  metrics_prefix='cnsl'),
+                  EarlyStopping(min_delta=0.01, patience=50, percentage=True, mode='max',
+                                reaching_goal=self.stop_when_train_acc_is,
+                                metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
+                                check_every=nept_check_every if self.use_neptune
+                                else console_check_every),
+                  StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),
+                  TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                      to_neptune=self.use_neptune, log_text=log_text),
+                  ComputeConfMatrix(num_classes=num_classes,
+                                    send_to_neptune=self.use_neptune,
+                                    neptune_text=log_text),
+                  RollingAccEachClassNeptune(log_every=nept_check_every,
+                                             num_classes=num_classes,
+                                             neptune_text=log_text),
+                  PlotTimeElapsed(time_every=100)]
+
+        all_cb += ([SaveModel(net, self.model_output_filename)] if self.model_output_filename is not None else [])
+        return all_cb
 
     def train(self, train_loader, callbacks=None, log_text='train'):
         self.experiment_data[self.current_run]['training_loaders'].append(train_loader)
@@ -105,35 +135,50 @@ class Experiment(ABC):
                                              num_classes=train_loader.dataset.num_classes,
                                              pretraining=self.pretraining,
                                              grayscale=train_loader.dataset.grayscale)
+        all_cb = self.prepare_train_callbacks(net, log_text, train_loader.dataset.num_classes)
 
-        nept_log = 5
-        std_log = 100
+        all_cb += (callbacks or [])
 
-        all_callbacks = [StandardMetrics(log_every=std_log, verbose=True, use_cuda=self.use_cuda),
-                              EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max',
-                                            reaching_goal=self.stop_when_train_acc_is,
-                                            metric_name='nept/mean_acc' if self.use_neptune else 'std/mean_acc',
-                                            check_every=nept_log if self.use_neptune else std_log),
-                              SaveModel(net, self.model_output_filename),
-                              StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),
-                              MetricsNeptune(neptune_log_text=log_text, log_every=nept_log,
-                                             use_cuda=self.use_cuda) if self.use_neptune else []]
-        all_callbacks += (callbacks or [])
-
-        net = self.call_train_net(train_loader, net, params_to_update, callbacks=all_callbacks)
+        net, logs = self.call_run(train_loader, net, params_to_update, train=True, callbacks=all_cb)
         return net
 
-    def finalize_test(self, df_testing, conf_mat, accuracy):
+    def finalize_test(self, df_testing, conf_mat, accuracy, save_dataframe):
         self.experiment_data[self.current_run]['df_testing'] = df_testing
         self.experiment_data[self.current_run]['conf_mat_acc'] = conf_mat
         self.experiment_data[self.current_run]['accuracy'] = accuracy
 
-    def test(self, net, test_loaders_list, log_text=''):
-        self.experiment_data[self.current_run]['testing_loaders'].append(test_loaders_list)
+    def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
+        all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
+                  TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                      to_neptune=self.use_neptune, log_text=log_text),
+                  ComputeConfMatrix(num_classes=num_classes,
+                                    send_to_neptune=self.use_neptune,
+                                    neptune_text=log_text),
+                  ]
+        all_cb += ([ComputeDataframe(num_classes, self.use_cuda, translation_type_str, self.network_name, plot_density=True, log_text_plot=log_text)] if save_dataframe else [])
+        return all_cb
 
+    def test(self, net, test_loaders_list, callbacks=None, log_text=''):
+        self.experiment_data[self.current_run]['testing_loaders'].append(test_loaders_list)
         save_dataframe = True if self.output_filename is not None else False
-        df_testing, conf_mat, accuracy = utils.test_loader_and_save(test_loaders_list, save_dataframe, net, self.use_cuda, self.network_name, self.num_iterations_testing, log_text=log_text)
-        self.finalize_test(df_testing, conf_mat, accuracy)
+
+        conf_mat_acc_all_tests = []
+        accuracy_all_tests = []
+
+        print('Running the tests')
+        df_testing = pd.DataFrame([])
+        for testing_loader in test_loaders_list:
+            all_cb = self.prepare_test_callbacks(testing_loader.dataset.num_classes, log_text, testing_loader.dataset.translation_type_str, save_dataframe)
+            all_cb += (callbacks or [])
+
+            net, logs = self.call_run(testing_loader, net, params_to_update=net.parameters(), train=False, callbacks=all_cb)
+            conf_mat_acc_all_tests.append(logs['conf_mat_acc'])
+            accuracy_all_tests.append(logs['total_accuracy'])
+            df_testing = pd.concat((df_testing, logs['dataframe']))
+
+            self.finalize_test(df_testing, logs['conf_mat_acc'], logs['total_accuracy'])
+
+        return df_testing, conf_mat_acc_all_tests, accuracy_all_tests
 
     def save_all_runs(self):
         if self.output_filename is not None:
@@ -151,7 +196,6 @@ class TypeNet(Enum):
     FC = 1
     RESNET = 2
     OTHER = 3
-
 
 class StandardTrainingExperiment(Experiment):
     def __init__(self, name_experiment='standard_training', parser=None):
@@ -172,16 +216,16 @@ class StandardTrainingExperiment(Experiment):
         list_tags.append('shFC') if self.shallow_FC else None
         super().finalize_init(PARAMS, list_tags)
 
-    def call_train_net(self, train_loader, net, params_to_update, callbacks=None):
-        return run(train_loader,
+    def call_run(self, loader, net, params_to_update, train=True, callbacks=None):
+        return run(loader,
                    use_cuda=self.use_cuda,
                    net=net,
                    callbacks=callbacks,
                    loss_fn=utils.make_cuda(torch.nn.CrossEntropyLoss(), self.use_cuda),
                    optimizer=torch.optim.Adam(params_to_update,
                                               lr=0.0001 if self.learning_rate is None else self.learning_rate),
-                   training_step=standard_net_step,
-                   training_step_kwargs={'train': True}
+                   iteration_step=standard_net_step,
+                   iteration_step_kwargs={'train': train}
                    )
 
     def get_net(self, network_name, num_classes, pretraining, grayscale=False):
@@ -407,10 +451,10 @@ class MatchinNetExp(Experiment):
         print(net)
         return net, net.parameters()
 
-    def call_train_net(self, train_loader, net, params_to_update, optimizer=None, callbacks=None):
-        return run(train_loader, use_cuda=self.use_cuda, net=net,
+    def call_run(self, data_loader, net, params_to_update, callbacks=None, train=True):
+        return run(data_loader, use_cuda=self.use_cuda, net=net,
                    callbacks=callbacks,
                    loss_fn=utils.make_cuda(torch.nn.NLLLoss(), self.use_cuda),
                    optimizer=Adam(params_to_update, lr=0.001 if self.learning_rate is None else self.learning_rate),
-                   training_step=matching_net_step,
-                   training_step_kwargs={'train': True, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q})
+                   iteration_step=matching_net_step,
+                   iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q})

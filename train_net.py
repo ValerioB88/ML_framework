@@ -131,7 +131,6 @@ def fit(model: Module, optimiser: Optimizer, loss_fn: Callable, epochs: int, dat
     callbacks.on_train_end()
 
 
-
 def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
     logs = {}
     images, labels, more = data
@@ -150,6 +149,7 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
         loss.backward()
         optimizer.step()
     return loss, labels, predicted, logs
+
 
 def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries, distance='l2', fce=False):
     logs = {}
@@ -190,37 +190,21 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         loss.backward()
         clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
-    # vis.imshow_batch(x)
-
     return loss, y, predicted, logs
 
 
-def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, verbose=True, optimizer=None, loss_fn=None, training_step=standard_net_step, training_step_kwargs=None):
+def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, iteration_step_kwargs=None):
     torch.cuda.empty_cache()
 
-    if training_step_kwargs is None:
-        training_step_kwargs = {}
+    if iteration_step_kwargs is None:
+        iteration_step_kwargs = {}
 
     make_cuda(net, use_cuda)
 
     callbacks = CallbackList(callbacks)
-
-    # callbacks = CallbackList([DefaultCallback(), ] + (callbacks or []) + [ProgressBarLogger(), ])
-    # callbacks.set_model(net)
-    callbacks.set_params({
-        # 'num_batches': max_iterations,
-        # 'batch_size': batch_size,
-        'verbose': verbose,
-        # 'metrics': (metrics or []),
-        # 'prepare_batch': prepare_batch,
-        'loss_fn': loss_fn,
-        'optimiser': optimizer
-    })
+    batch_logs = {}
 
     callbacks.on_train_begin()
-
-    start = time()
-    # confusion_matrix = torch.zeros(num_classes, num_classes)
 
     tot_iter = 0
     for epoch in range(20):
@@ -231,84 +215,21 @@ def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, verbose=T
             tot_iter += 1
             callbacks.on_batch_begin(batch_index)
 
-            if batch_index % 100 == 100 - 1:
-                print('Time Elapsed 100 iter: {}'.format(time() - start))
-                start = time()
+            loss, y_true, y_pred, logs = iteration_step(data, net, loss_fn, optimizer, use_cuda, **iteration_step_kwargs)
 
-            loss, y_true, y_pred, logs = training_step(data, net, loss_fn, optimizer, use_cuda, **training_step_kwargs)
+            batch_logs.update({'y_pred': y_pred, 'loss': loss, 'y_true': y_true, 'tot_iter': tot_iter, 'stop': False, **logs})
 
-            # batch_logs = batch_metrics(net, predicted, labels, metrics, batch_logs)
-            batch_logs = {'y_pred': y_pred, 'loss': loss, 'y_true': y_true, 'tot_iter': tot_iter, 'stop': False,
-                          **logs}
-            # LOGGER.next_index(batch_logs)
             callbacks.on_training_step_end(batch_index, batch_logs)
             callbacks.on_batch_end(batch_index, batch_logs)
 
             if batch_logs['stop']:
                 break
 
-            # callbacks.check_stop(batch_index, batch_logs)
-
-            # correct_train += ((predicted.cuda() if use_cuda else predicted) ==
-            #                   (labels.cuda() if use_cuda else labels)).sum().item()
-            # total_samples += labels.size(0)
-            #
-            # for t, p in zip(labels.view(-1), predicted.view(-1)):
-            #     confusion_matrix[t.long(), p.long()] += 1
-            # print statistics and compute validation
-            # running_loss += loss.item()
-
-            # if use_cuda and batch_index % compute_mean_acc_every == 0:
-            #     mean_loss = running_loss / compute_mean_acc_every
-            #     mean_acc_train = 100 * correct_train / total_samples
-            #
-            #     if verbose and batch_index % 5 == 0:
-            #         print('[iter{}] loss: {}, train_acc: {}'.format(tot_num_iterations, mean_loss, mean_acc_train))
-            #
-            #     metric = mean_acc_train
-            # if use_early_stopping and stop_when_train_acc_is < 100:
-            #     if es.step(metric):
-            #         stop_running = True
-                # correct_train = 0
-                # total_samples = 0
-                # running_loss = 0
-            # if use_cuda and (batch_index % send_metric_to_neptune_every) == send_metric_to_neptune_every - 1:
-            #     if mean_loss is not None:
-            #         neptune.send_metric('{} / Mean Running Loss '.format(log_text), mean_loss)
-            #         neptune.send_metric('{} / Mean Train Accuracy train'.format(log_text), mean_acc_train)
-            #     if correct_class is not None:
-            #         for idx, cc in enumerate(correct_class.numpy()):
-            #             neptune.send_metric('Train {} Class Acc'.format(idx), cc * 100)
-
-            # if use_cuda and (batch_index % (compute_mean_acc_every * num_classes * 5) == 0 or stop_running):
-            #     correct_class = confusion_matrix.diag() / confusion_matrix.sum(1)
-            #     confusion_matrix = torch.zeros(num_classes, num_classes)
-            #
-            # if batch_index % call_callback_every == call_callback_every - 1 and callback is not None:
-            #     args = {'net': net,
-            #             'mean_acc_train': mean_acc_train,
-            #             'iteration': batch_index}
-            #     callback(args)
-
-            # if tot_num_iterations >= max_iterations - 1:
-            #     if verbose:
-            #         print('Reached max iterations of {}'.format(max_iterations))
-            #     stop_running = True
-            #
-            # tot_num_iterations += 1
-            #
-            # if stop_running:
-            #     if verbose:
-            #         print('Reached early stopping')
-            #     break
         callbacks.on_epoch_end(epoch, epoch_logs)
-        # if stop_running:
-        #     if verbose:
-        #         print('Reached early stopping')
-        #     break
         if batch_logs['stop']:
             break
+
     callbacks.on_train_end(batch_logs)
     print('Finished Training')
 
-    return net
+    return net, batch_logs

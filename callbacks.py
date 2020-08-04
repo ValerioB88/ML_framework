@@ -10,8 +10,16 @@ import os
 import csv
 import io
 import neptune
+
+import framework_utils
 from few_shot.eval import evaluate
 import pathlib
+import seaborn as sn
+import matplotlib.pyplot as plt
+import torch
+from time import time
+import framework_utils as utils
+import pandas as pd
 
 class CallbackList(object):
     """Container abstracting a list of callbacks.
@@ -130,6 +138,46 @@ class Callback(object):
     def on_train_end(self, logs=None):
         pass
 
+class LearningRateScheduler(Callback):
+    """Learning rate scheduler.
+    # Arguments
+        schedule: a function that takes an epoch index as input
+            (integer, indexed from 0) and current learning rate
+            and returns a new learning rate as output (float).
+        verbose: int. 0: quiet, 1: update messages.
+    """
+
+    def __init__(self, schedule, verbose=0):
+        super(LearningRateScheduler, self).__init__()
+        self.schedule = schedule
+        self.verbose = verbose
+
+    def on_train_begin(self, logs=None):
+        self.optimiser = self.params['optimiser']
+
+    def on_epoch_begin(self, epoch, logs=None):
+        lrs = [self.schedule(epoch, param_group['lr']) for param_group in self.optimiser.param_groups]
+
+        if not all(isinstance(lr, (float, np.float32, np.float64)) for lr in lrs):
+            raise ValueError('The output of the "schedule" function '
+                             'should be float.')
+        self.set_lr(epoch, lrs)
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        if len(self.optimiser.param_groups) == 1:
+            logs['lr'] = self.optimiser.param_groups[0]['lr']
+        else:
+            for i, param_group in enumerate(self.optimiser.param_groups):
+                logs['lr_{}'.format(i)] = param_group['lr']
+
+    def set_lr(self, epoch, lrs):
+        for i, param_group in enumerate(self.optimiser.param_groups):
+            new_lr = lrs[i]
+            param_group['lr'] = new_lr
+            if self.verbose:
+                print('Epoch {:5d}: setting learning rate'
+                      ' of group {} to {:.4e}.'.format(epoch, i, new_lr))
 
 class DefaultCallback(Callback):
     """Records metrics over epochs by averaging over each batch.
@@ -499,32 +547,10 @@ class ModelCheckpoint(Callback):
                     print('\nEpoch %05d: saving model to %s' % (epoch + 1, filepath))
                 torch.save(self.model.state_dict(), filepath)
 
-import torch
-
-
-class Metrics(Callback):
-    def __init__(self, use_cuda, log_every):
-        self.use_cuda = use_cuda
-        self.log_every = log_every
-        self.init_classic_logs()
-
-    def update_classic_logs(self, batch_logs):
-        self.correct_train += ((batch_logs['y_pred'].cuda() if self.use_cuda else batch_logs['y_pred']) ==
-                               (batch_logs['y_true'].cuda() if self.use_cuda else batch_logs['y_true'])).sum().item()
-        self.total_samples += batch_logs['y_true'].size(0)
-        self.running_loss += batch_logs['loss']
-
-    def compute_mean_loss_acc(self):
-        mean_loss = self.running_loss / self.log_every
-        mean_acc = 100 * self.correct_train / self.total_samples
-        return mean_loss, mean_acc
-
-    def init_classic_logs(self):
-        self.correct_train, self.total_samples, self.running_loss = 0, 0, 0
-
 
 class EarlyStopping(Callback):
     def __init__(self, mode='min', min_delta=0, patience=10, percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100):
+        super().__init__()
         self.mode = mode  # mode refers to what are you trying to reach.
         self.check_every = check_every
         self.min_delta = min_delta
@@ -586,6 +612,7 @@ class EarlyStopping(Callback):
                 self.is_better = lambda a, best: a > best + (
                             best * min_delta / 100)
 
+
 class StopWhenMetricIs(Callback):
     def __init__(self, value_to_reach, metric_name):
         self.value_to_reach = value_to_reach
@@ -593,7 +620,7 @@ class StopWhenMetricIs(Callback):
         super().__init__()
 
     def on_batch_end(self, batch, logs=None):
-        if logs[self.metric_name] > self.value_to_reach:
+        if logs[self.metric_name] >= self.value_to_reach:
             logs['stop'] = True
 
 
@@ -601,6 +628,7 @@ class SaveModel(Callback):
     def __init__(self, net, output_path):
         self.output_path = output_path
         self.net = net
+        super().__init__()
 
     def on_train_end(self, logs=None):
         if self.output_path is not None:
@@ -609,71 +637,207 @@ class SaveModel(Callback):
             torch.save(self.net.state_dict(), self.output_path)
             neptune.log_artifact(self.output_path, self.output_path)
 
-class StandardMetrics(Metrics):
-    def __init__(self, log_every=100, verbose=True, use_cuda=True):
-        super().__init__(use_cuda, log_every)
-        self.verbose = verbose
 
+class Metrics(Callback):
+    def __init__(self, use_cuda, log_every, to_neptune=True, log_text=''):
+        self.use_cuda = use_cuda
+        self.log_every = log_every
+        self.to_neptune = to_neptune
+        self.log_text = log_text
+        self.correct_train, self.total_samples = 0, 0
+        super().__init__()
+
+    def update_classic_logs(self, batch_logs):
+        self.correct_train += ((batch_logs['y_pred'].cuda() if self.use_cuda else batch_logs['y_pred']) ==
+                               (batch_logs['y_true'].cuda() if self.use_cuda else batch_logs['y_true'])).sum().item()
+        self.total_samples += batch_logs['y_true'].size(0)
+
+
+class RunningMetrics(Metrics):
+    def __init__(self, use_cuda, log_every, to_neptune=True, log_text=''):
+        super().__init__(use_cuda, log_every, to_neptune, log_text)
+        self.running_loss = 0
+        self.init_classic_logs()
+
+    def update_classic_logs(self, batch_logs):
+        super().update_classic_logs(batch_logs)
+        self.running_loss += batch_logs['loss']
+
+    def compute_mean_loss_acc(self):
+        mean_loss = self.running_loss / self.log_every
+        mean_acc = 100 * self.correct_train / self.total_samples
+        return mean_loss, mean_acc
+
+    def init_classic_logs(self):
+        self.correct_train, self.total_samples, self.running_loss = 0, 0, 0
+
+
+class StandardMetrics(RunningMetrics):
+    def __init__(self, log_every=5, print_it=True, use_cuda=True, to_neptune=True, log_text='', metrics_prefix=''):
+        super().__init__(use_cuda, log_every, to_neptune, log_text)
+        self.print_it = print_it
+        self.metrics_prefix = metrics_prefix
 
     def on_training_step_end(self, batch_index, batch_logs=None):
         super().on_batch_end(batch_index, batch_logs)
         self.update_classic_logs(batch_logs)
-        if self.verbose and batch_index % self.log_every == 0:
-            batch_logs['std/mean_loss'], batch_logs['std/mean_acc'] = self.compute_mean_loss_acc()
-            print('[iter{}] loss: {}, train_acc: {}'.format(batch_logs['tot_iter'], batch_logs['std/mean_loss'], batch_logs['std/mean_acc']))
+        if batch_index % self.log_every == 0:
+            batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc()
+            if self.print_it:
+                print('[iter{}] loss: {}, train_acc: {}'.format(batch_logs['tot_iter'], batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
+            if self.to_neptune:
+                neptune.send_metric('{} / Mean Running Loss '.format(self.log_text), batch_logs[f'{self.metrics_prefix}/mean_loss'])
+                neptune.send_metric('{} / Mean Train Accuracy train'.format(self.log_text), batch_logs[f'{self.metrics_prefix}/mean_acc'])
             self.init_classic_logs()
 
 
-class MetricsNeptune(Metrics):
-    def __init__(self, neptune_log_text, log_every=5, use_cuda=True):
-        super().__init__(use_cuda, log_every)
-        self.neptune_log_text = neptune_log_text
+class TotalAccuracyMetric(Metrics):
+    def __init__(self,  use_cuda, to_neptune=True, log_text=''):
+        super().__init__(use_cuda, log_every=None, to_neptune=to_neptune, log_text=log_text)
 
     def on_training_step_end(self, batch_index, batch_logs=None):
+        super().on_training_step_end(batch_index, batch_logs)
         self.update_classic_logs(batch_logs)
-        if batch_index % self.log_every == 0:
-            batch_logs['nept/mean_loss'], batch_logs['nept/mean_acc'] = self.compute_mean_loss_acc()
-            neptune.send_metric('{} / Mean Running Loss '.format(self.neptune_log_text), batch_logs['nept/mean_loss'])
-            neptune.send_metric('{} / Mean Train Accuracy train'.format(self.neptune_log_text), batch_logs['nept/mean_acc'])
-            self.init_classic_logs()
 
-class LearningRateScheduler(Callback):
-    """Learning rate scheduler.
-    # Arguments
-        schedule: a function that takes an epoch index as input
-            (integer, indexed from 0) and current learning rate
-            and returns a new learning rate as output (float).
-        verbose: int. 0: quiet, 1: update messages.
-    """
+    def on_train_end(self, logs=None):
+        logs['total_accuracy'] = 100.0 * self.correct_train / self.total_samples
+        print('Total Accuracy [{}]: {}%'.format(self.log_text, logs['total_accuracy']))
+        if self.to_neptune:
+            neptune.log_metric('{} Acc'.format(self.log_text), logs['total_accuracy'])
 
-    def __init__(self, schedule, verbose=0):
-        super(LearningRateScheduler, self).__init__()
-        self.schedule = schedule
-        self.verbose = verbose
+
+class ComputeConfMatrix(Callback):
+    def __init__(self, num_classes, send_to_neptune=True, neptune_text=''):
+        self.confusion_matrix = torch.zeros(num_classes, num_classes)
+        self.send_to_neptune = send_to_neptune
+        self.neptune_text = neptune_text
+        super().__init__()
+
+    def on_training_step_end(self, batch, logs=None):
+        for t, p in zip(logs['y_true'].view(-1), logs['y_pred'].view(-1)):
+            self.confusion_matrix[t.long(), p.long()] += 1
+
+    def on_train_end(self, logs=None):
+        logs['conf_mat_acc'] = (self.confusion_matrix / self.confusion_matrix.sum(1)[:, None]).numpy()
+
+        if self.send_to_neptune:
+            figure = plt.figure(figsize=(10, 7))
+            sn.heatmap(logs['conf_mat_acc'], annot=True, annot_kws={"size": 16})  # font size
+            plt.ylabel('truth')
+            plt.xlabel('predicted')
+            plt.title(self.neptune_text)
+            neptune.log_image('{} Confusion Matrix'.format(self.neptune_text), figure)
+
+
+class RollingAccEachClassNeptune(Callback):
+    def __init__(self, log_every, num_classes, neptune_text=''):
+        self.log_every = log_every
+        self.confusion_matrix = torch.zeros(num_classes, num_classes)
+        self.neptune_text = neptune_text
+        self.num_classes = num_classes
+        super().__init__()
+
+    def on_training_step_end(self, batch, logs=None):
+        for t, p in zip(logs['y_true'].view(-1), logs['y_pred'].view(-1)):
+            self.confusion_matrix[t.long(), p.long()] += 1
+        if batch % self.log_every:
+            correct_class = self.confusion_matrix.diag() / self.confusion_matrix.sum(1)
+            self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
+            if correct_class is not None:
+                for idx, cc in enumerate(correct_class.numpy()):
+                    neptune.send_metric(f'Train {idx} Class Acc - {self.neptune_text}', cc * 100)
+
+
+class PlotTimeElapsed(Callback):
+    def __init__(self, time_every=100):
+        super().__init__()
+        self.time_every = time_every
+        self.start_time = 0
 
     def on_train_begin(self, logs=None):
-        self.optimiser = self.params['optimiser']
+        self.start_time = time()
 
-    def on_epoch_begin(self, epoch, logs=None):
-        lrs = [self.schedule(epoch, param_group['lr']) for param_group in self.optimiser.param_groups]
+    def on_batch_end(self, batch, logs=None):
+        if batch % self.time_every == 0:
+            print('Time Elapsed {} iter: {}'.format(self.time_every, time() - self.start_time))
 
-        if not all(isinstance(lr, (float, np.float32, np.float64)) for lr in lrs):
-            raise ValueError('The output of the "schedule" function '
-                             'should be float.')
-        self.set_lr(epoch, lrs)
+class ComputeDataframe(Callback):
+    @staticmethod
+    def build_columns(cat_to_save):
+        array = [np.concatenate(np.array([np.array(['softmax', 'softmax']),
+                                          np.repeat(['softmax'], len(cat_to_save)),
+                                          np.array(['logits', 'logits']),
+                                          np.repeat(['logits'], len(cat_to_save))])),
+                 np.concatenate(np.array([np.array(['main_softm', 'main_softm']),
+                                          np.repeat(['useful_softm'], len(cat_to_save)),
+                                          np.array(['main_logits', 'main_logits']),
+                                          np.repeat(['useful_logits'], len(cat_to_save))])),
+                 np.concatenate(np.array([np.array(['max_softm', 'softm_class']),
+                                          cat_to_save,
+                                          np.array(['max_logits', 'logits_class']),
+                                          cat_to_save]))]
+        return array
 
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        if len(self.optimiser.param_groups) == 1:
-            logs['lr'] = self.optimiser.param_groups[0]['lr']
-        else:
-            for i, param_group in enumerate(self.optimiser.param_groups):
-                logs['lr_{}'.format(i)] = param_group['lr']
+    def __init__(self, num_classes, use_cuda, translation_type_str, network_name, plot_density=True, log_text_plot=''):
+        super().__init__()
+        self.num_classes = num_classes
+        self.translation_type_str = translation_type_str
+        self.network_name = network_name
 
-    def set_lr(self, epoch, lrs):
-        for i, param_group in enumerate(self.optimiser.param_groups):
-            new_lr = lrs[i]
-            param_group['lr'] = new_lr
-            if self.verbose:
-                print('Epoch {:5d}: setting learning rate'
-                      ' of group {} to {:.4e}.'.format(epoch, i, new_lr))
+        self.index_dataframe = ['net', 'class_name', 'transl_X', 'transl_Y', 'tested_area', 'is_correct', 'class_output']
+        self.column_names = self.build_columns(['class {}'.format(i) for i in range(self.num_classes)])
+        self.rows_frames = []
+        self.use_cuda = use_cuda
+        self.plot_density_on_neptune = plot_density
+        self.log_text_plot = log_text_plot
+
+    def on_training_step_end(self, batch, logs=None):
+        output_batch_t = logs['output']
+        labels_batch_t = logs['y_true']
+        predicted_batch_t = logs['y_pred']
+        face_center_batch_t = logs['more']['center']
+
+        correct_batch_t = (utils.make_cuda(predicted_batch_t, self.use_cuda) == utils.make_cuda(labels_batch_t, self.use_cuda))
+
+        softmax_batch_t = torch.softmax(utils.make_cuda(output_batch_t, self.use_cuda), 1)
+        softmax_batch = np.array(softmax_batch_t.tolist())
+        output_batch = np.array(output_batch_t.tolist())
+        labels = labels_batch_t.tolist()
+        predicted_batch = predicted_batch_t.tolist()
+        correct_batch = correct_batch_t.tolist()
+        face_center_batch = np.array([np.array(i) for i in face_center_batch_t]).transpose()
+
+        for c, softmax_all_cat in enumerate(softmax_batch):
+            output = output_batch[c]
+            softmax = softmax_batch[c]
+            softmax_correct_category = softmax[labels[c]]
+            output_correct_category = output[labels[c]]
+            max_softmax = np.max(softmax)
+            max_output = np.max(output)
+            correct = correct_batch[c]
+            label = labels[c]
+            predicted = predicted_batch[c]
+            face_center = face_center_batch[c]
+
+            assert softmax_correct_category == max_softmax if correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
+            assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
+            assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
+
+            self.rows_frames.append([self.network_name, label, face_center[0], face_center[1], self.translation_type_str, correct, predicted, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
+
+    def on_train_end(self, logs=None):
+        data_frame = pd.DataFrame(self.rows_frames)
+        data_frame = data_frame.set_index([i for i in range(len(self.index_dataframe))])
+        data_frame.index.names = self.index_dataframe
+        data_frame.columns = self.column_names
+        data_frame.reset_index(level='is_correct', inplace=True)
+
+        if self.plot_density_on_neptune:
+            mean_accuracy = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
+            ax, fig, im = framework_utils.imshow_density(mean_accuracy, lim=[1 / self.num_classes - 1 / self.num_classes * 0.2, 1], plot_args={'interpolate': True})
+            plt.title(self.log_text_plot)
+            cbar = fig.colorbar(im)
+            cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)
+            neptune.log_image('{} Density Plot Accuracy'.format(self.log_text_plot), fig)
+
+        logs['dataframe'] = data_frame
