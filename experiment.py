@@ -30,7 +30,7 @@ class Experiment(ABC):
         self.num_iterations_testing = PARAMS['num_iterations_testing']
         self.network_name = PARAMS['network_name']
         self.learning_rate = PARAMS['learning_rate']
-        self.force_server = PARAMS['force_server']
+        self.force_cuda = PARAMS['force_cuda']
         self.additional_tags = PARAMS['additional_tags']
         self.size_object = PARAMS['size_object']
         self.use_neptune = PARAMS['use_neptune']
@@ -38,7 +38,7 @@ class Experiment(ABC):
         self.experiment_data = {self.current_run: {'training_loaders': [],
                                                    'testing_loaders': []}}
 
-        self.use_cuda = self.force_server
+        self.use_cuda = self.force_cuda
         if torch.cuda.is_available():
             print('Using cuda - you are probably on the server')
             self.use_cuda = True
@@ -129,13 +129,17 @@ class Experiment(ABC):
         all_cb += ([SaveModel(net, self.model_output_filename)] if self.model_output_filename is not None else [])
         return all_cb
 
+    @abstractmethod
+    def _get_num_classes(self, loader):
+        return loader.dataset.num_classes
+
     def train(self, train_loader, callbacks=None, log_text='train'):
         self.experiment_data[self.current_run]['training_loaders'].append(train_loader)
         net, params_to_update = self.get_net(self.network_name,
-                                             num_classes=train_loader.dataset.num_classes,
+                                             num_classes=self._get_num_classes(train_loader),
                                              pretraining=self.pretraining,
                                              grayscale=train_loader.dataset.grayscale)
-        all_cb = self.prepare_train_callbacks(net, log_text, train_loader.dataset.num_classes)
+        all_cb = self.prepare_train_callbacks(net, log_text, self._get_num_classes(train_loader))
 
         all_cb += (callbacks or [])
 
@@ -170,7 +174,7 @@ class Experiment(ABC):
         print('Running the tests')
         df_testing = pd.DataFrame([])
         for idx, testing_loader in enumerate(test_loaders_list):
-            all_cb = self.prepare_test_callbacks(testing_loader.dataset.num_classes, log_text[idx] if log_text is not None else '', testing_loader.dataset.translation_type_str, save_dataframe)
+            all_cb = self.prepare_test_callbacks(self._get_num_classes(testing_loader), log_text[idx] if log_text is not None else '', testing_loader.dataset.translation_type_str, save_dataframe)
             all_cb += (callbacks or [])
 
             net, logs = self.call_run(testing_loader, net, params_to_update=net.parameters(), train=False, callbacks=all_cb)
@@ -422,16 +426,18 @@ class StandardTrainingExperiment(Experiment):
         return network, params_to_update
 
 
-class MatchinNetExp(Experiment):
+class MatchingNetExp(Experiment):
     def __init__(self, name_experiment):
         parser = argparse.ArgumentParser(allow_abbrev=False)
-        parser = utils.parse_experiment_arguments(parser)
-        self.folder = None
+        parser = utils.parse_few_shot_learning_parameters(parser)
+        self.training_folder = None
+        self.testing_folder = None
         self.n, self.k, self.q, self.canvas_size = 0, 0, 0, 0
         super().__init__(name_experiment=name_experiment, parser=parser)
 
     def finalize_init(self, PARAMS, list_tags):
-        self.folder = PARAMS['folder_for_training']
+        self.training_folder = PARAMS['folder_for_training']
+        self.testing_folder = PARAMS['folder_for_testing']
         self.n = PARAMS['n_shot']
         self.k = PARAMS['k_way']
         self.q = PARAMS['q_queries']
@@ -461,3 +467,17 @@ class MatchinNetExp(Experiment):
                    optimizer=Adam(params_to_update, lr=0.001 if self.learning_rate is None else self.learning_rate),
                    iteration_step=matching_net_step,
                    iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q})
+
+    def _get_num_classes(self, loader):
+        return self.k
+
+def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
+        all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
+                  TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                      to_neptune=self.use_neptune, log_text=log_text),
+                  ComputeConfMatrix(num_classes=num_classes,
+                                    send_to_neptune=self.use_neptune,
+                                    neptune_text=log_text),
+                  ]
+        all_cb += ([ComputeDataframe(self.n, self.use_cuda, translation_type_str, self.network_name, plot_density=True, log_text_plot=log_text)] if save_dataframe else [])
+        return all_cb

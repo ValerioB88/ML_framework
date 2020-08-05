@@ -37,8 +37,8 @@ def parse_experiment_arguments(parser=None):
                         help="run experiment n times",
                         type=int,
                         default=1)
-    parser.add_argument("-fserver", "--force_server",
-                        help="Force to run it in server mode",
+    parser.add_argument("-fcuda", "--force_cuda",
+                        help="Force to run it with cuda enabled (for testing)",
                         type=int,
                         default=0)
     parser.add_argument("-neptune", "--use_neptune",
@@ -89,6 +89,10 @@ def parse_few_shot_learning_parameters(parser=None):
 
     parser.add_argument("-trainf", "--folder_for_training",
                         help="Select the folder for training this network.",
+                        type=str,
+                        default=None)
+    parser.add_argument("-testf", "--folder_for_testing",
+                        help="Select the folder for testing this network.",
                         type=str,
                         default=None)
     parser.add_argument("-n_shot", "--n_shot",

@@ -12,7 +12,6 @@ import io
 import neptune
 
 import framework_utils
-from few_shot.eval import evaluate
 import pathlib
 import seaborn as sn
 import matplotlib.pyplot as plt
@@ -323,34 +322,6 @@ class CSVLogger(Callback):
     def on_train_end(self, logs=None):
         self.csv_file.close()
         self.writer = None
-
-
-class EvaluateMetrics(Callback):
-    """Evaluates metrics on a dataset after every epoch.
-
-    # Argments
-        dataloader: torch.DataLoader of the dataset on which the model will be evaluated
-        prefix: Prefix to prepend to the names of the metrics when they is logged. Defaults to 'val_' but can be changed
-        if the model is to be evaluated on many datasets separately.
-        suffix: Suffix to append to the names of the metrics when they is logged.
-    """
-    def __init__(self, dataloader, prefix='val_', suffix=''):
-        super(EvaluateMetrics, self).__init__()
-        self.dataloader = dataloader
-        self.prefix = prefix
-        self.suffix = suffix
-
-    def on_train_begin(self, logs=None):
-        self.metrics = self.params['metrics']
-        self.prepare_batch = self.params['prepare_batch']
-        self.loss_fn = self.params['loss_fn']
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        logs.update(
-            evaluate(self.model, self.dataloader, self.prepare_batch, self.metrics, self.loss_fn, self.prefix, self.suffix)
-        )
-
 
 class ReduceLROnPlateau(Callback):
     """Reduce learning rate when a metric has stopped improving.
@@ -830,6 +801,7 @@ class ComputeDataframe(Callback):
         data_frame = pd.DataFrame(self.rows_frames)
         data_frame = data_frame.set_index([i for i in range(len(self.index_dataframe))])
         data_frame.index.names = self.index_dataframe
+
         data_frame.columns = self.column_names
         data_frame.reset_index(level='is_correct', inplace=True)
 
