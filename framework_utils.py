@@ -107,7 +107,7 @@ def parse_few_shot_learning_parameters(parser=None):
                         help="number of query for each class for meta-training.",
                         type=int,
                         default=1)
-    parser.add_argument("-cs", "--canvas_size",
+    parser.add_argument("-sc", "--size_canvas",
                         help="Change the size of the canvas. Canvas can be smaller than object (object will be cropped). "
                              "Use only for purely convolutional networks will not support this (the FC layer needs to be specified",
                         type=lambda x: tuple([int(i) for i in x.split("_")]),

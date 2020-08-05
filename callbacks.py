@@ -716,7 +716,7 @@ class RollingAccEachClassNeptune(Callback):
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
             if correct_class is not None:
                 for idx, cc in enumerate(correct_class.numpy()):
-                    neptune.send_metric(f'Train {idx} Class Acc - {self.neptune_text}', cc * 100)
+                    neptune.send_metric(f'Training {idx} Class Acc - [{self.neptune_text}]', cc * 100)
 
 
 class PlotTimeElapsed(Callback):
@@ -731,6 +731,7 @@ class PlotTimeElapsed(Callback):
     def on_batch_end(self, batch, logs=None):
         if batch % self.time_every == 0:
             print('Time Elapsed {} iter: {}'.format(self.time_every, time() - self.start_time))
+            self.start_time = time()
 
 
 class ComputeDataframe(Callback):

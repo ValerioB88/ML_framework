@@ -432,7 +432,7 @@ class MatchingNetExp(Experiment):
         parser = utils.parse_few_shot_learning_parameters(parser)
         self.training_folder = None
         self.testing_folder = None
-        self.n, self.k, self.q, self.canvas_size = 0, 0, 0, 0
+        self.n, self.k, self.q, self.size_canvas = 0, 0, 0, 0
         super().__init__(name_experiment=name_experiment, parser=parser)
 
     def finalize_init(self, PARAMS, list_tags):
@@ -441,9 +441,9 @@ class MatchingNetExp(Experiment):
         self.n = PARAMS['n_shot']
         self.k = PARAMS['k_way']
         self.q = PARAMS['q_queries']
-        self.canvas_size = PARAMS['canvas_size']
+        self.size_canvas = PARAMS['size_canvas']
         list_tags.append(f'{self.k}w_{self.n}s_{self.q}q')
-        list_tags.append(f'cs{self.canvas_size}')
+        list_tags.append(f'sc{self.size_canvas}')
         super().finalize_init(PARAMS, list_tags)
 
     def get_net(self, network_name, num_classes, pretraining, grayscale=False):
