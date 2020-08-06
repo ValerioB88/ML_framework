@@ -43,8 +43,8 @@ def parse_experiment_arguments(parser=None):
                         default=0)
     parser.add_argument("-neptune", "--use_neptune",
                         help="Log stuff to neptune",
-                        type=bool,
-                        default=True)
+                        type=int,
+                        default=1)
     parser.add_argument("-tags", "--additional_tags",
                         help="Add additional tags. Separate them by underscore. E.g. tag1_tag2",
                         type=str,

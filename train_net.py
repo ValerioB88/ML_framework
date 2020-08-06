@@ -171,7 +171,7 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     return loss, y, predicted, logs
 
 
-def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, iteration_step_kwargs=None):
+def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, iteration_step_kwargs=None, epochs=20):
     torch.cuda.empty_cache()
 
     if iteration_step_kwargs is None:
@@ -185,7 +185,7 @@ def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer
     callbacks.on_train_begin()
 
     tot_iter = 0
-    for epoch in range(20):
+    for epoch in range(epochs):
         epoch_logs = {}
         callbacks.on_epoch_begin(epoch)
         print('epoch: {}'.format(epoch))

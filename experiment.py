@@ -1,17 +1,19 @@
-from train_net import standard_net_step
 import torchvision
 import cloudpickle
 import glob
-from models.FCnets import FC4
 from enum import Enum
 import re
-from callbacks import *
-import framework_utils as utils
-from models.meta_learning_models import MatchingNetwork
-from train_net import matching_net_step, run
 import argparse
 from torch.optim import Adam
 from abc import ABC, abstractmethod
+from typing import Dict, List, Callable, Union
+
+from callbacks import *
+import framework_utils as utils
+from models.meta_learning_models import MatchingNetwork
+from models.FCnets import FC4
+from train_net import matching_net_step, run, standard_net_step
+
 
 
 class Experiment(ABC):
@@ -92,7 +94,7 @@ class Experiment(ABC):
                 utils.neptune_log_dataset_info(loader, log_text='testing')
 
     @abstractmethod
-    def call_run(self, train_loader, net, params_to_update, callbacks=None, train=True):
+    def call_run(self, train_loader, net, params_to_update, callbacks=None, train=True, epochs=20):
         pass
 
     @abstractmethod
@@ -102,11 +104,7 @@ class Experiment(ABC):
     def prepare_train_callbacks(self, net, log_text, num_classes):
         nept_check_every = 5
         console_check_every = 100
-        all_cb = [StandardMetrics(log_every=nept_check_every, print_it=False,
-                                  use_cuda=self.use_cuda,
-                                  to_neptune=True, log_text=log_text,
-                                  metrics_prefix='nept') if self.use_neptune else [],
-                  StandardMetrics(log_every=console_check_every, print_it=True,
+        all_cb = [StandardMetrics(log_every=console_check_every, print_it=True,
                                   use_cuda=self.use_cuda,
                                   to_neptune=False, log_text=log_text,
                                   metrics_prefix='cnsl'),
@@ -121,15 +119,23 @@ class Experiment(ABC):
                   ComputeConfMatrix(num_classes=num_classes,
                                     send_to_neptune=self.use_neptune,
                                     neptune_text=log_text),
-                  RollingAccEachClassNeptune(log_every=nept_check_every,
-                                             num_classes=num_classes,
-                                             neptune_text=log_text),
+
+                  StopFromUserInput(),
                   PlotTimeElapsed(time_every=100)]
 
-        all_cb += ([SaveModel(net, self.model_output_filename)] if self.model_output_filename is not None else [])
+        all_cb += ([SaveModel(net, self.model_output_filename, self.use_neptune)] if self.model_output_filename is not None else [])
+        if self.use_neptune:
+            all_cb += [StandardMetrics(log_every=nept_check_every, print_it=False,
+                                       use_cuda=self.use_cuda,
+                                       to_neptune=True, log_text=log_text,
+                                       metrics_prefix='nept'),
+                       RollingAccEachClassNeptune(log_every=nept_check_every,
+                                                  num_classes=num_classes,
+                                                  neptune_text=log_text)
+                       ]
+
         return all_cb
 
-    @abstractmethod
     def _get_num_classes(self, loader):
         return loader.dataset.num_classes
 
@@ -162,22 +168,26 @@ class Experiment(ABC):
         all_cb += ([ComputeDataframe(num_classes, self.use_cuda, translation_type_str, self.network_name, plot_density=True, log_text_plot=log_text)] if save_dataframe else [])
         return all_cb
 
-    from typing import Dict, List, Callable, Union
-
     def test(self, net, test_loaders_list, callbacks=None, log_text: List[str] = None):
+        if log_text is None:
+            log_text = [d.dataset.name_generator for d in test_loaders_list]
         self.experiment_data[self.current_run]['testing_loaders'].append(test_loaders_list)
         save_dataframe = True if self.output_filename is not None else False
 
         conf_mat_acc_all_tests = []
         accuracy_all_tests = []
 
-        print('Running the tests')
+        print('*TESTS')
         df_testing = pd.DataFrame([])
         for idx, testing_loader in enumerate(test_loaders_list):
+            print('Testing on [{}], [{}]'.format(testing_loader.dataset.name_generator, testing_loader.dataset.translation_type_str))
             all_cb = self.prepare_test_callbacks(self._get_num_classes(testing_loader), log_text[idx] if log_text is not None else '', testing_loader.dataset.translation_type_str, save_dataframe)
             all_cb += (callbacks or [])
 
-            net, logs = self.call_run(testing_loader, net, params_to_update=net.parameters(), train=False, callbacks=all_cb)
+            net, logs = self.call_run(testing_loader, net,
+                                      params_to_update=net.parameters(), train=False,
+                                      callbacks=all_cb,
+                                      epochs=1)
             conf_mat_acc_all_tests.append(logs['conf_mat_acc'])
             accuracy_all_tests.append(logs['total_accuracy'])
             if save_dataframe:
@@ -204,6 +214,7 @@ class TypeNet(Enum):
     RESNET = 2
     OTHER = 3
 
+
 class StandardTrainingExperiment(Experiment):
     def __init__(self, name_experiment='standard_training', parser=None):
         parser = utils.parse_standard_training_arguments(parser)
@@ -223,7 +234,7 @@ class StandardTrainingExperiment(Experiment):
         list_tags.append('shFC') if self.shallow_FC else None
         super().finalize_init(PARAMS, list_tags)
 
-    def call_run(self, loader, net, params_to_update, train=True, callbacks=None):
+    def call_run(self, loader, net, params_to_update, train=True, callbacks=None, epochs=20):
         return run(loader,
                    use_cuda=self.use_cuda,
                    net=net,
@@ -232,7 +243,8 @@ class StandardTrainingExperiment(Experiment):
                    optimizer=torch.optim.Adam(params_to_update,
                                               lr=0.0001 if self.learning_rate is None else self.learning_rate),
                    iteration_step=standard_net_step,
-                   iteration_step_kwargs={'train': train}
+                   iteration_step_kwargs={'train': train},
+                   epochs=epochs
                    )
 
     def get_net(self, network_name, num_classes, pretraining, grayscale=False):
@@ -269,18 +281,21 @@ class StandardTrainingExperiment(Experiment):
     @staticmethod
     def prepare_load(network, num_classes, pretrain_path, type_net):
         find_ouptut = int(re.findall('\d+', re.findall(r'o\d+', pretrain_path)[0])[0])
-        find_gap = 'gap' in pretrain_path
-        find_sFC = 'sFC' in pretrain_path
-        find_bC = 'bC' in pretrain_path
+        find_gap = 'gap1' in pretrain_path
+        find_sFC = 'sFC1' in pretrain_path
+        find_bC = 'bC1' in pretrain_path
         # Grayscale not implemented: grayscale is assumed to be FALSE at all time
         if type_net == TypeNet.VGG:
             if find_sFC:
+                print('**Pretraing model has a shallow FC!')
                 network.classifier = torch.nn.Linear(512 * 7 * 7, num_classes)
             else:
                 network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, find_ouptut)
             if find_gap:
+                print('**Pretraing model has a GAP!')
                 network.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
                 if find_sFC:
+                    print('**Pretraing model has a shallow FC!')
                     network.classifier = torch.nn.Linear(512, num_classes)
                 else:
                     network.classifier[0] = torch.nn.Linear(512, 4096)
@@ -460,13 +475,14 @@ class MatchingNetExp(Experiment):
         print(net)
         return net, net.parameters()
 
-    def call_run(self, data_loader, net, params_to_update, callbacks=None, train=True):
+    def call_run(self, data_loader, net, params_to_update, callbacks=None, train=True, epochs=20):
         return run(data_loader, use_cuda=self.use_cuda, net=net,
                    callbacks=callbacks,
                    loss_fn=utils.make_cuda(torch.nn.NLLLoss(), self.use_cuda),
                    optimizer=Adam(params_to_update, lr=0.001 if self.learning_rate is None else self.learning_rate),
                    iteration_step=matching_net_step,
-                   iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q})
+                   iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q},
+                   epochs=epochs)
 
     def _get_num_classes(self, loader):
         return self.k

@@ -19,6 +19,7 @@ import torch
 from time import time
 import framework_utils as utils
 import pandas as pd
+import signal, os
 
 class CallbackList(object):
     """Container abstracting a list of callbacks.
@@ -519,6 +520,21 @@ class ModelCheckpoint(Callback):
                 torch.save(self.model.state_dict(), filepath)
 
 
+class StopFromUserInput(Callback):
+    stop_next_iter = False
+
+    def __init__(self):
+        super().__init__()
+        signal.signal(signal.SIGINT, self.handler)  # only in python version 3.2
+
+    def handler(self, signum, frame):
+        self.stop_next_iter = True
+
+    def on_batch_end(self, batch, logs=None):
+        if self.stop_next_iter:
+            logs['stop'] = True
+
+
 class EarlyStopping(Callback):
     def __init__(self, mode='min', min_delta=0, patience=10, percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100):
         super().__init__()
@@ -596,9 +612,10 @@ class StopWhenMetricIs(Callback):
 
 
 class SaveModel(Callback):
-    def __init__(self, net, output_path):
+    def __init__(self, net, output_path, log_in_neptune=False):
         self.output_path = output_path
         self.net = net
+        self.log_in_neptune =log_in_neptune
         super().__init__()
 
     def on_train_end(self, logs=None):
@@ -606,7 +623,7 @@ class SaveModel(Callback):
             pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
             print('Saving model in {}'.format(self.output_path))
             torch.save(self.net.state_dict(), self.output_path)
-            neptune.log_artifact(self.output_path, self.output_path)
+            neptune.log_artifact(self.output_path, self.output_path) if self.log_in_neptune else None 
 
 
 class Metrics(Callback):
