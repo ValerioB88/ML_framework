@@ -12,8 +12,10 @@ def get_few_shot_encoder(num_input_channels=1) -> nn.Module:
     return nn.Sequential(
         conv_block(num_input_channels, 64),
         conv_block(64, 64),
-        conv_block(64, 64),
-        conv_block(64, 64),
+        conv_block(64, 128),
+        conv_block(128, 256),
+        conv_block(256, 512),
+        conv_block(512, 512),
         Flatten(),
     )
 
