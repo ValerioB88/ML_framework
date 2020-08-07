@@ -21,7 +21,7 @@ class Experiment(ABC):
         parser = utils.parse_experiment_arguments(parser)
         PARAMS = vars(parser.parse_known_args()[0])
 
-        self.current_run = 0
+        self.current_run = -1
         self.name_experiment = name_experiment
         self.num_runs = PARAMS['num_runs']  # this is not used here, and it shouldn't be here, but for now we are creating a neptune session when an Experiment is created, and we want to save this as a parameter, so we need to do it here.
         self.pretraining = PARAMS['pretraining']
@@ -37,8 +37,9 @@ class Experiment(ABC):
         self.size_object = PARAMS['size_object']
         self.use_neptune = PARAMS['use_neptune']
         self.size_object = None if self.size_object == '0' else self.size_object
-        self.experiment_data = {self.current_run: {'training_loaders': [],
-                                                   'testing_loaders': []}}
+        self.experiment_data = {}
+        self.experiment_loaders = {}  # we separate data from loaders because loaders are pickled objects and may broke when module name changes. If this happens, at least we preserve the data. We generally don't even need the loaders much.
+
 
         self.use_cuda = self.force_cuda
         if torch.cuda.is_available():
@@ -67,13 +68,14 @@ class Experiment(ABC):
     def new_run(self):
         self.current_run += 1
         self.experiment_data[self.current_run] = {}
-        self.experiment_data[self.current_run] = {'training_loaders': [],
-                                                  'testing_loaders': []}
+        self.experiment_loaders[self.current_run] = {'training': [],
+                                                     'testing': []}
         print('Run Number {}'.format(self.current_run))
 
     def finalize_init(self, PARAMS, list_tags):
         print(PARAMS)
         self.initialize_neptune(PARAMS, list_tags) if self.use_neptune else None
+        self.new_run()
 
     @staticmethod
     def initialize_neptune(PARAMS, list_tags):
@@ -140,7 +142,7 @@ class Experiment(ABC):
         return loader.dataset.num_classes
 
     def train(self, train_loader, callbacks=None, log_text='train'):
-        self.experiment_data[self.current_run]['training_loaders'].append(train_loader)
+        self.experiment_loaders[self.current_run]['training'].append(train_loader)
         net, params_to_update = self.get_net(self.network_name,
                                              num_classes=self._get_num_classes(train_loader),
                                              pretraining=self.pretraining,
@@ -171,7 +173,7 @@ class Experiment(ABC):
     def test(self, net, test_loaders_list, callbacks=None, log_text: List[str] = None):
         if log_text is None:
             log_text = [d.dataset.name_generator for d in test_loaders_list]
-        self.experiment_data[self.current_run]['testing_loaders'].append(test_loaders_list)
+        self.experiment_loaders[self.current_run]['testing'].append(test_loaders_list)
         save_dataframe = True if self.output_filename is not None else False
 
         conf_mat_acc_all_tests = []
@@ -199,11 +201,14 @@ class Experiment(ABC):
 
     def save_all_runs(self):
         if self.output_filename is not None:
-            result_path = self.output_filename
-            pathlib.Path(os.path.dirname(result_path)).mkdir(parents=True, exist_ok=True)
-            cloudpickle.dump(self.experiment_data, open(result_path, 'wb'))
-            print('Saved in {}'.format(result_path))
-            neptune.log_artifact(result_path, result_path)
+            result_path_data = self.output_filename
+            result_path_loaders = os.path.dirname(result_path_data) + '/loaders_' + os.path.basename(result_path_data)
+            pathlib.Path(os.path.dirname(result_path_data)).mkdir(parents=True, exist_ok=True)
+            cloudpickle.dump(self.experiment_data, open(result_path_data, 'wb'))
+            cloudpickle.dump(self.experiment_loaders, open(result_path_loaders, 'wb'))
+            print('Saved data in {}, \nSaved loaders in {}'.format(result_path_data, result_path_loaders))
+            neptune.log_artifact(result_path_data, result_path_data)
+            neptune.log_artifact(result_path_loaders, result_path_loaders)
         else:
             Warning('Results path is not specified!')
 
@@ -486,14 +491,3 @@ class MatchingNetExp(Experiment):
 
     def _get_num_classes(self, loader):
         return self.k
-
-def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
-        all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
-                  TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_neptune=self.use_neptune, log_text=log_text),
-                  ComputeConfMatrix(num_classes=num_classes,
-                                    send_to_neptune=self.use_neptune,
-                                    neptune_text=log_text),
-                  ]
-        all_cb += ([ComputeDataframe(self.n, self.use_cuda, translation_type_str, self.network_name, plot_density=True, log_text_plot=log_text)] if save_dataframe else [])
-        return all_cb
