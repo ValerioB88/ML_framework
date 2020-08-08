@@ -120,7 +120,8 @@ class Experiment(ABC):
                                       to_neptune=self.use_neptune, log_text=log_text),
                   ComputeConfMatrix(num_classes=num_classes,
                                     send_to_neptune=self.use_neptune,
-                                    neptune_text=log_text),
+                                    neptune_text=log_text,
+                                    reset_every=200),
 
                   StopFromUserInput(),
                   PlotTimeElapsed(time_every=100)]

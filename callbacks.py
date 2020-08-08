@@ -254,76 +254,6 @@ class ProgressBarLogger(Callback):
         self.pbar.close()
 
 
-class CSVLogger(Callback):
-    """Callback that streams epoch results to a csv file.
-    Supports all values that can be represented as a string,
-    including 1D iterables such as np.ndarray.
-
-    # Arguments
-        filename: filename of the csv file, e.g. 'run/log.csv'.
-        separator: string used to separate elements in the csv file.
-        append: True: append if file exists (useful for continuing
-            training). False: overwrite existing file,
-    """
-
-    def __init__(self, filename, separator=',', append=False):
-        self.sep = separator
-        self.filename = filename
-        self.append = append
-        self.writer = None
-        self.keys = None
-        self.append_header = True
-        self.file_flags = ''
-        self._open_args = {'newline': '\n'}
-        super(CSVLogger, self).__init__()
-
-    def on_train_begin(self, logs=None):
-        if self.append:
-            if os.path.exists(self.filename):
-                with open(self.filename, 'r' + self.file_flags) as f:
-                    self.append_header = not bool(len(f.readline()))
-            mode = 'a'
-        else:
-            mode = 'w'
-
-        self.csv_file = io.open(self.filename,
-                                mode + self.file_flags,
-                                **self._open_args)
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-
-        def handle_value(k):
-            is_zero_dim_ndarray = isinstance(k, np.ndarray) and k.ndim == 0
-            if isinstance(k, str):
-                return k
-            elif isinstance(k, Iterable) and not is_zero_dim_ndarray:
-                return '"[%s]"' % (', '.join(map(str, k)))
-            else:
-                return k
-
-        if self.keys is None:
-            self.keys = sorted(logs.keys())
-
-        if not self.writer:
-            class CustomDialect(csv.excel):
-                delimiter = self.sep
-            fieldnames = ['epoch'] + self.keys
-            self.writer = csv.DictWriter(self.csv_file,
-                                         fieldnames=fieldnames,
-                                         dialect=CustomDialect)
-            if self.append_header:
-                self.writer.writeheader()
-
-        row_dict = OrderedDict({'epoch': epoch})
-        row_dict.update((key, handle_value(logs[key])) for key in self.keys)
-        self.writer.writerow(row_dict)
-        self.csv_file.flush()
-
-    def on_train_end(self, logs=None):
-        self.csv_file.close()
-        self.writer = None
-
 class ReduceLROnPlateau(Callback):
     """Reduce learning rate when a metric has stopped improving.
 
@@ -525,7 +455,7 @@ class StopFromUserInput(Callback):
 
     def __init__(self):
         super().__init__()
-        signal.signal(signal.SIGINT, self.handler)  # only in python version 3.2
+        signal.signal(signal.SIGINT, self.handler)  # CTRL + C
 
     def handler(self, signum, frame):
         self.stop_next_iter = True
@@ -533,6 +463,7 @@ class StopFromUserInput(Callback):
     def on_batch_end(self, batch, logs=None):
         if self.stop_next_iter:
             logs['stop'] = True
+            print('Stopping from user input')
 
 
 class EarlyStopping(Callback):
@@ -581,6 +512,7 @@ class EarlyStopping(Callback):
 
             if self.num_bad_epochs >= self.patience:
                 logs['stop'] = True
+                print('Early Stopping')
 
 
     def _init_is_better(self, mode, min_delta, percentage):
@@ -609,6 +541,7 @@ class StopWhenMetricIs(Callback):
     def on_batch_end(self, batch, logs=None):
         if logs[self.metric_name] >= self.value_to_reach:
             logs['stop'] = True
+            print(f'Metric [{self.metric_name}] has reached the value [{self.value_to_reach}]. Stopping')
 
 
 class SaveModel(Callback):
@@ -695,15 +628,22 @@ class TotalAccuracyMetric(Metrics):
 
 
 class ComputeConfMatrix(Callback):
-    def __init__(self, num_classes, send_to_neptune=True, neptune_text=''):
-        self.confusion_matrix = torch.zeros(num_classes, num_classes)
+    def __init__(self, num_classes, reset_every=None, send_to_neptune=True, neptune_text=''):
+        self.num_classes = num_classes
+        self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
         self.send_to_neptune = send_to_neptune
         self.neptune_text = neptune_text
+        self.reset_every = reset_every
+        self.num_iter = 0
         super().__init__()
 
     def on_training_step_end(self, batch, logs=None):
+        if self.reset_every is not None and batch % self.reset_every == 0:
+            self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
+            self.num_iter = 0
         for t, p in zip(logs['y_true'].view(-1), logs['y_pred'].view(-1)):
             self.confusion_matrix[t.long(), p.long()] += 1
+        self.num_iter += 1
 
     def on_train_end(self, logs=None):
         logs['conf_mat_acc'] = (self.confusion_matrix / self.confusion_matrix.sum(1)[:, None]).numpy()
@@ -713,7 +653,7 @@ class ComputeConfMatrix(Callback):
             sn.heatmap(logs['conf_mat_acc'], annot=True, annot_kws={"size": 16})  # font size
             plt.ylabel('truth')
             plt.xlabel('predicted')
-            plt.title(self.neptune_text)
+            plt.title(self.neptune_text + ' last {} iters'.format(self.num_iter))
             neptune.log_image('{} Confusion Matrix'.format(self.neptune_text), figure)
 
 
