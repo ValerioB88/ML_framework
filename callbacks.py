@@ -708,8 +708,9 @@ class ComputeDataframe(Callback):
                                           cat_to_save]))]
         return array
 
-    def __init__(self, num_classes, use_cuda, translation_type_str, network_name, plot_density=True, log_text_plot=''):
+    def __init__(self, num_classes, use_cuda, translation_type_str, network_name, size_canvas, plot_density=True, log_text_plot=''):
         super().__init__()
+        self.size_canvas = size_canvas
         self.num_classes = num_classes
         self.translation_type_str = translation_type_str
         self.network_name = network_name
@@ -765,7 +766,7 @@ class ComputeDataframe(Callback):
 
         if self.plot_density_on_neptune:
             mean_accuracy = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
-            ax, fig, im = framework_utils.imshow_density(mean_accuracy, lim=[1 / self.num_classes - 1 / self.num_classes * 0.2, 1], plot_args={'interpolate': True})
+            ax, fig, im = framework_utils.imshow_density(mean_accuracy, lim=[1 / self.num_classes - 1 / self.num_classes * 0.2, 1], plot_args={'interpolate': True, 'size_canvas': self.size_canvas})
             plt.title(self.log_text_plot)
             cbar = fig.colorbar(im)
             cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)

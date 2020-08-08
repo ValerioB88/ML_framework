@@ -168,7 +168,8 @@ class Experiment(ABC):
                                     send_to_neptune=self.use_neptune,
                                     neptune_text=log_text),
                   ]
-        all_cb += ([ComputeDataframe(num_classes, self.use_cuda, translation_type_str, self.network_name, plot_density=True, log_text_plot=log_text)] if save_dataframe else [])
+        size_canvas = self.size_canvas if hasattr(self, 'size_canvas') else (224, 224)
+        all_cb += ([ComputeDataframe(num_classes, self.use_cuda, translation_type_str, self.network_name, size_canvas, plot_density=True, log_text_plot=log_text)] if save_dataframe else [])
         return all_cb
 
     def test(self, net, test_loaders_list, callbacks=None, log_text: List[str] = None):
