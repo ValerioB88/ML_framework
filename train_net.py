@@ -152,8 +152,10 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         queries = model.f(support, queries)
 
     distances = pairwise_distances(queries, support, distance)
+    # we generally only care about the test output/more
     logs['output'] = -distances
     logs['more'] = more
+    logs['more']['center'] = [i[n_shot * k_way:] for i in logs['more']['center']]
 
     attention = (-distances).softmax(dim=1)
 

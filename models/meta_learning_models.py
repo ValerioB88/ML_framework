@@ -1,6 +1,10 @@
+from typing import Any
+
 import torch.nn as nn
 import torch
 from models.model_utils import Flatten, conv_block
+import torch.nn.functional as F
+
 
 def get_few_shot_encoder(num_input_channels=1) -> nn.Module:
     """Creates a few shot encoder as used in Matching and Prototypical Networks
@@ -18,6 +22,39 @@ def get_few_shot_encoder(num_input_channels=1) -> nn.Module:
         conv_block(512, 512),
         Flatten(),
     )
+
+class MatchingNetPlus(nn.Module):
+    # def __init__(self):
+    #     super().__init__()
+    #     self.conv1 = nn.Conv2d(3, 6, 5)  # 28x28->24x24
+    #     self.conv2 = nn.Conv2d(6, 16, 5)  # 20x20
+    #     self.fc1 = nn.Linear(16 * 20 * 20, 120)  # flatten conv size
+    #     self.fc2 = nn.Linear(120, 84)
+    #     self.fc3 = nn.Linear(84, 10)
+
+    @staticmethod
+    def few_shot_encoder(num_input_channels):
+        return nn.Sequential(
+            conv_block(num_input_channels, 64),
+            conv_block(64, 64),
+            conv_block(64, 128),
+            conv_block(128, 256),
+            conv_block(256, 512),
+            conv_block(512, 1),
+        )
+    @staticmethod
+    def evaluator(k_way, n_shot):
+        return nn.Sequential(
+         conv_block(k_way * n_shot, 64)
+
+        )
+    # def forward(self, x):
+    #     x = F.relu(self.conv1(x))
+    #     x = F.relu(self.conv2(x))
+    #     x = x.view(-1, 16 * 20 * 20)  # flatten conv
+    #     x = F.relu(self.fc1(x))
+    #     x = F.relu(self.fc2(x))
+
 
 
 class MatchingNetwork(nn.Module):

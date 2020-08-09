@@ -110,7 +110,7 @@ class Experiment(ABC):
                                   use_cuda=self.use_cuda,
                                   to_neptune=False, log_text=log_text,
                                   metrics_prefix='cnsl'),
-                  EarlyStopping(min_delta=0.01, patience=50, percentage=True, mode='max',
+                  EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max',
                                 reaching_goal=self.stop_when_train_acc_is,
                                 metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
                                 check_every=nept_check_every if self.use_neptune
@@ -169,7 +169,7 @@ class Experiment(ABC):
                                     neptune_text=log_text),
                   ]
         size_canvas = self.size_canvas if hasattr(self, 'size_canvas') else (224, 224)
-        all_cb += ([ComputeDataframe(num_classes, self.use_cuda, translation_type_str, self.network_name, size_canvas, plot_density=True, log_text_plot=log_text)] if save_dataframe else [])
+        all_cb += ([ComputeDataframe(num_classes, self.use_cuda, translation_type_str, self.network_name, size_canvas, log_density_neptune=True if self.use_neptune else False, log_text_plot=log_text)] if save_dataframe else [])
         return all_cb
 
     def test(self, net, test_loaders_list, callbacks=None, log_text: List[str] = None):
@@ -197,7 +197,7 @@ class Experiment(ABC):
             if save_dataframe:
                 df_testing = pd.concat((df_testing, logs['dataframe']))
 
-            self.finalize_test(df_testing, logs['conf_mat_acc'], logs['total_accuracy'])
+        self.finalize_test(df_testing, conf_mat_acc_all_tests, accuracy_all_tests)
 
         return df_testing, conf_mat_acc_all_tests, accuracy_all_tests
 

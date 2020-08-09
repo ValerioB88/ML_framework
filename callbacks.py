@@ -622,7 +622,7 @@ class TotalAccuracyMetric(Metrics):
 
     def on_train_end(self, logs=None):
         logs['total_accuracy'] = 100.0 * self.correct_train / self.total_samples
-        print('Total Accuracy [{}]: {}%'.format(self.log_text, logs['total_accuracy']))
+        print('Total Accuracy for [{}] samples, [{}]: {}%'.format(self.total_samples, self.log_text, logs['total_accuracy']))
         if self.to_neptune:
             neptune.log_metric('{} Acc'.format(self.log_text), logs['total_accuracy'])
 
@@ -708,7 +708,7 @@ class ComputeDataframe(Callback):
                                           cat_to_save]))]
         return array
 
-    def __init__(self, num_classes, use_cuda, translation_type_str, network_name, size_canvas, plot_density=True, log_text_plot=''):
+    def __init__(self, num_classes, use_cuda, translation_type_str, network_name, size_canvas, log_density_neptune=True, log_text_plot=''):
         super().__init__()
         self.size_canvas = size_canvas
         self.num_classes = num_classes
@@ -719,7 +719,7 @@ class ComputeDataframe(Callback):
         self.column_names = self.build_columns(['class {}'.format(i) for i in range(self.num_classes)])
         self.rows_frames = []
         self.use_cuda = use_cuda
-        self.plot_density_on_neptune = plot_density
+        self.plot_density_on_neptune = log_density_neptune
         self.log_text_plot = log_text_plot
 
     def on_training_step_end(self, batch, logs=None):
@@ -729,7 +729,6 @@ class ComputeDataframe(Callback):
         face_center_batch_t = logs['more']['center']
 
         correct_batch_t = (utils.make_cuda(predicted_batch_t, self.use_cuda) == utils.make_cuda(labels_batch_t, self.use_cuda))
-
         softmax_batch_t = torch.softmax(utils.make_cuda(output_batch_t, self.use_cuda), 1)
         softmax_batch = np.array(softmax_batch_t.tolist())
         output_batch = np.array(output_batch_t.tolist())
