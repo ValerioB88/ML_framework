@@ -637,6 +637,7 @@ class ComputeConfMatrix(Callback):
         self.num_iter = 0
         super().__init__()
 
+
     def on_training_step_end(self, batch, logs=None):
         if self.reset_every is not None and batch % self.reset_every == 0:
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
@@ -708,8 +709,9 @@ class ComputeDataframe(Callback):
                                           cat_to_save]))]
         return array
 
-    def __init__(self, num_classes, use_cuda, translation_type_str, network_name, size_canvas, log_density_neptune=True, log_text_plot=''):
+    def __init__(self, num_classes, use_cuda, translation_type_str, network_name, size_canvas, log_density_neptune=True, log_text_plot='', output_and_softmax=True):
         super().__init__()
+        self.output_and_softmax = output_and_softmax
         self.size_canvas = size_canvas
         self.num_classes = num_classes
         self.translation_type_str = translation_type_str
@@ -729,38 +731,46 @@ class ComputeDataframe(Callback):
         face_center_batch_t = logs['more']['center']
 
         correct_batch_t = (utils.make_cuda(predicted_batch_t, self.use_cuda) == utils.make_cuda(labels_batch_t, self.use_cuda))
-        softmax_batch_t = torch.softmax(utils.make_cuda(output_batch_t, self.use_cuda), 1)
-        softmax_batch = np.array(softmax_batch_t.tolist())
-        output_batch = np.array(output_batch_t.tolist())
         labels = labels_batch_t.tolist()
         predicted_batch = predicted_batch_t.tolist()
         correct_batch = correct_batch_t.tolist()
         face_center_batch = np.array([np.array(i) for i in face_center_batch_t]).transpose()
 
-        for c, softmax_all_cat in enumerate(softmax_batch):
-            output = output_batch[c]
-            softmax = softmax_batch[c]
-            softmax_correct_category = softmax[labels[c]]
-            output_correct_category = output[labels[c]]
-            max_softmax = np.max(softmax)
-            max_output = np.max(output)
+        if self.output_and_softmax:
+            softmax_batch_t = torch.softmax(utils.make_cuda(output_batch_t, self.use_cuda), 1)
+            softmax_batch = np.array(softmax_batch_t.tolist())
+            output_batch = np.array(output_batch_t.tolist())
+
+        for c, _ in enumerate(correct_batch_t):
             correct = correct_batch[c]
             label = labels[c]
             predicted = predicted_batch[c]
             face_center = face_center_batch[c]
 
-            assert softmax_correct_category == max_softmax if correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
-            assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
-            assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
+            if self.output_and_softmax:
+                softmax_all_cat = softmax_batch[c]
+                output = output_batch[c]
+                softmax = softmax_batch[c]
+                softmax_correct_category = softmax[labels[c]]
+                output_correct_category = output[labels[c]]
+                max_softmax = np.max(softmax)
+                max_output = np.max(output)
 
-            self.rows_frames.append([self.network_name, label, face_center[0], face_center[1], self.translation_type_str, correct, predicted, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
+                assert softmax_correct_category == max_softmax if correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
+                assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
+                assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
+
+                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1], self.translation_type_str, correct, predicted, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
+            else:
+                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1], self.translation_type_str, correct, predicted])
 
     def on_train_end(self, logs=None):
         data_frame = pd.DataFrame(self.rows_frames)
         data_frame = data_frame.set_index([i for i in range(len(self.index_dataframe))])
         data_frame.index.names = self.index_dataframe
 
-        data_frame.columns = self.column_names
+        if self.output_and_softmax:
+            data_frame.columns = self.column_names
         data_frame.reset_index(level='is_correct', inplace=True)
 
         if self.plot_density_on_neptune:
@@ -772,3 +782,12 @@ class ComputeDataframe(Callback):
             neptune.log_image('{} Density Plot Accuracy'.format(self.log_text_plot), fig)
 
         logs['dataframe'] = data_frame
+
+class CompConfMatrixFewShot(ComputeConfMatrix):
+    def on_training_step_end(self, batch, logs=None):
+        if self.reset_every is not None and batch % self.reset_every == 0:
+            self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
+            self.num_iter = 0
+        for t, p in zip(logs['y_true_real_lab'].view(-1), logs['y_pred_real_lab'].view(-1)):
+            self.confusion_matrix[t.long(), p.long()] += 1
+        self.num_iter += 1

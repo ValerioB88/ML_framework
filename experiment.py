@@ -10,7 +10,7 @@ from typing import Dict, List, Callable, Union
 
 from callbacks import *
 import framework_utils as utils
-from models.meta_learning_models import MatchingNetwork
+from models.meta_learning_models import MatchingNetwork, MatchingNetPlus
 from models.FCnets import FC4
 from train_net import matching_net_step, run, standard_net_step
 
@@ -169,7 +169,12 @@ class Experiment(ABC):
                                     neptune_text=log_text),
                   ]
         size_canvas = self.size_canvas if hasattr(self, 'size_canvas') else (224, 224)
-        all_cb += ([ComputeDataframe(num_classes, self.use_cuda, translation_type_str, self.network_name, size_canvas, log_density_neptune=True if self.use_neptune else False, log_text_plot=log_text)] if save_dataframe else [])
+        all_cb += ([ComputeDataframe(num_classes,
+                                     self.use_cuda,
+                                     translation_type_str,
+                                     self.network_name, size_canvas,
+                                     log_density_neptune=True if self.use_neptune else False, log_text_plot=log_text)]
+                   if save_dataframe else [])
         return all_cb
 
     def test(self, net, test_loaders_list, callbacks=None, log_text: List[str] = None):
@@ -471,12 +476,15 @@ class MatchingNetExp(Experiment):
     def get_net(self, network_name, num_classes, pretraining, grayscale=False):
         # ToDo: Matching Learning pretrain
         device = torch.device('cuda' if self.use_cuda else 'cpu')
-        net = MatchingNetwork(self.n, self.k, self.q, fce=False,
-                              num_input_channels=1 if grayscale else 3,
-                              lstm_layers=0,
-                              lstm_input_size=0,
-                              unrolling_steps=0,
-                              device=device)
+        if network_name == 'matching_net':
+            net = MatchingNetwork(self.n, self.k, self.q, fce=False,
+                                  num_input_channels=1 if grayscale else 3,
+                                  lstm_layers=0,
+                                  lstm_input_size=0,
+                                  unrolling_steps=0,
+                                  device=device)
+        if network_name == 'matching_net_plus':
+            net = MatchingNetPlus(self.n, self.k, self.q)
 
         print('***Network***')
         print(net)
@@ -491,5 +499,33 @@ class MatchingNetExp(Experiment):
                    iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q},
                    epochs=epochs)
 
-    # def _get_num_classes(self, loader):
-    #     return self.k
+    def prepare_train_callbacks(self, net, log_text, num_classes):
+        all_cb = super().prepare_train_callbacks(net, log_text, num_classes)
+        idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
+        assert len(idx_ccm) == 1
+        all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=num_classes,
+                                                   send_to_neptune=self.use_neptune,
+                                                   neptune_text=log_text,
+                                                   reset_every=200)
+        return all_cb
+
+    def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
+        all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
+        idx_cd = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeDataframe)]
+        assert len(idx_cd) == 1
+        all_cb[idx_cd[0]] = ComputeDataframe(self.k,
+                                            self.use_cuda,
+                                            translation_type_str,
+                                            self.network_name, self.size_canvas,
+                                            log_density_neptune=True if self.use_neptune else False,
+                                            log_text_plot=log_text,
+                                            output_and_softmax=False)
+
+        idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
+        assert len(idx_ccm) == 1
+        all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=num_classes,
+                                                   send_to_neptune=self.use_neptune,
+                                                   neptune_text=log_text,
+                                                   reset_every=None)
+
+        return all_cb

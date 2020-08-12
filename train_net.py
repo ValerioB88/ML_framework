@@ -167,12 +167,14 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     prediction_real_labels = selected_classes[predicted]
     # CrossEntropy is log softmax + NLLLoss. Here we do them separately.
     loss = loss_fn(make_cuda(clipped_y_pred.log(), use_cuda), make_cuda(y, use_cuda))
+    logs['y_pred_real_lab'] = prediction_real_labels
+    logs['y_true_real_lab'] = queries_real_labels
 
     if train:
         loss.backward()
         clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
-    return loss, queries_real_labels, prediction_real_labels, logs
+    return loss, y, predicted, logs
 
 
 def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, iteration_step_kwargs=None, epochs=20):

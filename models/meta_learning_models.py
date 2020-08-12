@@ -24,40 +24,38 @@ def get_few_shot_encoder(num_input_channels=1) -> nn.Module:
     )
 
 class MatchingNetPlus(nn.Module):
-    # def __init__(self):
-    #     super().__init__()
-    #     self.conv1 = nn.Conv2d(3, 6, 5)  # 28x28->24x24
-    #     self.conv2 = nn.Conv2d(6, 16, 5)  # 20x20
-    #     self.fc1 = nn.Linear(16 * 20 * 20, 120)  # flatten conv size
-    #     self.fc2 = nn.Linear(120, 84)
-    #     self.fc3 = nn.Linear(84, 10)
+    def __init__(self,  n: int, k: int, q: int, num_input_channels: int):
+        self.n = n
+        self.k = k
+        self.q = q
+        self.num_input_channels = num_input_channels
+        self.encoder = self.few_shot_encoder()
+        self.evaluator = self.evaluator()
 
-    @staticmethod
-    def few_shot_encoder(num_input_channels):
+    def few_shot_encoder(self):
         return nn.Sequential(
-            conv_block(num_input_channels, 64),
+            conv_block(self.num_input_channels, 64),
             conv_block(64, 64),
             conv_block(64, 128),
             conv_block(128, 256),
             conv_block(256, 512),
             conv_block(512, 1),
         )
-    @staticmethod
-    def evaluator(k_way, n_shot):
+
+    def evaluator(self):
         return nn.Sequential(
-                    conv_block(k_way * n_shot, 64),
-                    conv_block(64, 64),
-                    nn.Linear(224 * 224 * 3, 2500),
+                    conv_block(self.k * self.n + 1, 64),
+                    conv_block(64, 128),
+                    conv_block(64, 256),
+                    Flatten(),
+                    nn.Linear(224 * 224 * 3, 120),
                     nn.ReLU(True),
-
+                    nn.Dropout(),
+                    nn.Linear(4096, 4096),
+                    nn.ReLU(True),
+                    nn.Dropout(),
+                    nn.Linear(4096, self.k),
         )
-    # def forward(self, x):
-    #     x = F.relu(self.conv1(x))
-    #     x = F.relu(self.conv2(x))
-    #     x = x.view(-1, 16 * 20 * 20)  # flatten conv
-    #     x = F.relu(self.fc1(x))
-    #     x = F.relu(self.fc2(x))
-
 
 
 class MatchingNetwork(nn.Module):
