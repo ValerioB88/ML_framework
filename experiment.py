@@ -10,10 +10,9 @@ from typing import Dict, List, Callable, Union
 
 from callbacks import *
 import framework_utils as utils
-from models.meta_learning_models import MatchingNetwork, MatchingNetPlus
+from models.meta_learning_models import MatchingNetwork, MatchingNetPlus, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
 from models.FCnets import FC4
-from train_net import matching_net_step, run, standard_net_step
-
+from train_net import matching_net_step, run, standard_net_step, matching_net_step_plus
 
 
 class Experiment(ABC):
@@ -214,8 +213,9 @@ class Experiment(ABC):
             cloudpickle.dump(self.experiment_data, open(result_path_data, 'wb'))
             cloudpickle.dump(self.experiment_loaders, open(result_path_loaders, 'wb'))
             print('Saved data in {}, \nSaved loaders in {}'.format(result_path_data, result_path_loaders))
-            neptune.log_artifact(result_path_data, result_path_data)
-            neptune.log_artifact(result_path_loaders, result_path_loaders)
+            if self.use_neptune:
+                neptune.log_artifact(result_path_data, result_path_data)
+                neptune.log_artifact(result_path_loaders, result_path_loaders)
         else:
             Warning('Results path is not specified!')
 
@@ -454,12 +454,20 @@ class StandardTrainingExperiment(Experiment):
 
 
 class MatchingNetExp(Experiment):
+    '''
+    Select network_name = 'matching_net_basics' for using the basic network that works for any image size, used in the paper for Omniglot.
+                        'matching_net_more' to use a more complex version of the matching net, with more conv layer. It can still accept any type of input
+                        'matching_net_plus' the decision is made by an evaluation network. It accepts 128x128px images.
+                        #ToDo: with a adaptive average pool make it accept whatever size
+    '''
     def __init__(self, name_experiment):
         parser = argparse.ArgumentParser(allow_abbrev=False)
         parser = utils.parse_few_shot_learning_parameters(parser)
         self.training_folder = None
         self.testing_folder = None
         self.n, self.k, self.q, self.size_canvas = 0, 0, 0, 0
+        self.step = None
+        self.lossfn = None
         super().__init__(name_experiment=name_experiment, parser=parser)
 
     def finalize_init(self, PARAMS, list_tags):
@@ -476,15 +484,32 @@ class MatchingNetExp(Experiment):
     def get_net(self, network_name, num_classes, pretraining, grayscale=False):
         # ToDo: Matching Learning pretrain
         device = torch.device('cuda' if self.use_cuda else 'cpu')
-        if network_name == 'matching_net':
+        if network_name == 'matching_net_basic':
             net = MatchingNetwork(self.n, self.k, self.q, fce=False,
                                   num_input_channels=1 if grayscale else 3,
                                   lstm_layers=0,
                                   lstm_input_size=0,
                                   unrolling_steps=0,
-                                  device=device)
+                                  device=device,
+                                  encoder=get_few_shot_encoder_basic)
+            self.step = matching_net_step
+            self.lossfn = torch.nn.NLLLoss()
+        if network_name == 'matching_net_more':
+            net = MatchingNetwork(self.n, self.k, self.q, fce=False,
+                                  num_input_channels=1 if grayscale else 3,
+                                  lstm_layers=0,
+                                  lstm_input_size=0,
+                                  unrolling_steps=0,
+                                  device=device,
+                                  encoder=get_few_shot_encoder)
+            self.step = matching_net_step
+            self.lossfn = torch.nn.NLLLoss()
+
         if network_name == 'matching_net_plus':
-            net = MatchingNetPlus(self.n, self.k, self.q)
+            net = MatchingNetPlus(self.n, self.k, self.q,
+                                  num_input_channels=1 if grayscale else 3)
+            self.step = matching_net_step_plus
+            self.lossfn = torch.nn.CrossEntropyLoss()
 
         print('***Network***')
         print(net)
@@ -493,9 +518,9 @@ class MatchingNetExp(Experiment):
     def call_run(self, data_loader, net, params_to_update, callbacks=None, train=True, epochs=20):
         return run(data_loader, use_cuda=self.use_cuda, net=net,
                    callbacks=callbacks,
-                   loss_fn=utils.make_cuda(torch.nn.NLLLoss(), self.use_cuda),
+                   loss_fn=utils.make_cuda(self.lossfn, self.use_cuda),
                    optimizer=Adam(params_to_update, lr=0.001 if self.learning_rate is None else self.learning_rate),
-                   iteration_step=matching_net_step,
+                   iteration_step=self.step,
                    iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q},
                    epochs=epochs)
 

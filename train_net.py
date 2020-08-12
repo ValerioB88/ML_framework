@@ -127,6 +127,48 @@ def matching_net_predictions(attention: torch.Tensor, n: int, k: int, q: int, us
 
     return y_pred
 
+def matching_net_step_plus(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries):
+    logs = {}
+    x, y_real_labels, more = data
+    if train:
+        model.train()
+        optimizer.zero_grad()
+    else:
+        model.eval()
+    embeddings = model.encoder(make_cuda(x, use_cuda))
+    y = torch.arange(0, k_way, 1 / q_queries).long()
+
+    # Samples are ordered by the NShotWrapper class as follows:
+    # k lots of n support samples from a particular class
+    # k lots of q query samples from those classes
+    support = embeddings[:n_shot * k_way]
+    queries = embeddings[n_shot * k_way:]
+    t = make_cuda(torch.tensor([]), use_cuda)
+    for q in queries:
+        t = torch.cat((t, torch.cat((support, make_cuda(torch.unsqueeze(q, 0), use_cuda)))), dim=1)
+
+    support_and_test = t.permute(dims=[1, 0, 2, 3])
+    output = model.evaluator(support_and_test)
+
+    _, predicted = torch.max(output, 1)
+
+    loss = loss_fn(make_cuda(output, use_cuda),
+                   make_cuda(y, use_cuda))
+
+    selected_classes = y_real_labels[n_shot * k_way::n_shot]
+    prediction_real_labels = selected_classes[predicted]
+    queries_real_labels = y_real_labels[n_shot * k_way:]
+    logs['output'] = output
+    logs['more'] = more
+    logs['more']['center'] = [i[n_shot * k_way:] for i in logs['more']['center']]
+    logs['y_pred_real_lab'] = prediction_real_labels
+    logs['y_true_real_lab'] = queries_real_labels
+
+    if train:
+        loss.backward()
+        clip_grad_norm_(model.parameters(), 1)
+        optimizer.step()
+    return loss, y, predicted, logs
 
 def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries, distance='l2', fce=False):
     logs = {}

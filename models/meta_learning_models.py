@@ -6,61 +6,65 @@ from models.model_utils import Flatten, conv_block
 import torch.nn.functional as F
 
 
-def get_few_shot_encoder(num_input_channels=1) -> nn.Module:
+def get_few_shot_encoder_basic(num_input_channels=1) -> nn.Module:
+    """Creates a few shot encoder. This is the simple version used in the paper.
+    """
+    return nn.Sequential(
+        conv_block(num_input_channels, 64),
+        conv_block(64, 64),
+        conv_block(64, 64),
+        conv_block(64, 64),
+        Flatten(),
+    )
+
+def get_few_shot_evaluator(input_channels, output):
+    return nn.Sequential(
+        conv_block(input_channels, 64),
+        Flatten(),
+        nn.Linear(1024, 512),
+        nn.ReLU(True),
+        nn.Dropout(),
+        nn.Linear(512, 256),
+        nn.ReLU(True),
+        nn.Dropout(),
+        nn.Linear(256, output),
+    )
+
+
+def get_few_shot_encoder(num_input_channels=1, flatten=True) -> nn.Module:
     """Creates a few shot encoder as used in Matching and Prototypical Networks
 
     # Arguments:
         num_input_channels: Number of color channels the model expects input data to contain. Omniglot = 1,
             miniImageNet = 3
     """
-    return nn.Sequential(
-        conv_block(num_input_channels, 64),
-        conv_block(64, 64),
-        conv_block(64, 128),
-        conv_block(128, 256),
-        conv_block(256, 512),
-        conv_block(512, 512),
-        Flatten(),
-    )
+
+    modules = [conv_block(num_input_channels, 64),
+               conv_block(64, 64),
+               conv_block(64, 128)]
+    modules.extend([conv_block(128, 256),
+                    conv_block(256, 512),
+                    conv_block(512, 512),
+                    Flatten()]
+                   if flatten else
+                   [conv_block(128, 1)])
+    return nn.Sequential(*modules)
 
 class MatchingNetPlus(nn.Module):
     def __init__(self,  n: int, k: int, q: int, num_input_channels: int):
+        super().__init__()
         self.n = n
         self.k = k
         self.q = q
         self.num_input_channels = num_input_channels
-        self.encoder = self.few_shot_encoder()
-        self.evaluator = self.evaluator()
+        self.encoder = get_few_shot_encoder(num_input_channels, flatten=False)
+        self.evaluator = get_few_shot_evaluator(self.k * self.n + 1, self.k)
 
-    def few_shot_encoder(self):
-        return nn.Sequential(
-            conv_block(self.num_input_channels, 64),
-            conv_block(64, 64),
-            conv_block(64, 128),
-            conv_block(128, 256),
-            conv_block(256, 512),
-            conv_block(512, 1),
-        )
-
-    def evaluator(self):
-        return nn.Sequential(
-                    conv_block(self.k * self.n + 1, 64),
-                    conv_block(64, 128),
-                    conv_block(64, 256),
-                    Flatten(),
-                    nn.Linear(224 * 224 * 3, 120),
-                    nn.ReLU(True),
-                    nn.Dropout(),
-                    nn.Linear(4096, 4096),
-                    nn.ReLU(True),
-                    nn.Dropout(),
-                    nn.Linear(4096, self.k),
-        )
 
 
 class MatchingNetwork(nn.Module):
     def __init__(self, n: int, k: int, q: int, fce: bool, num_input_channels: int,
-                 lstm_layers: int, lstm_input_size: int, unrolling_steps: int, device: torch.device):
+                 lstm_layers: int, lstm_input_size: int, unrolling_steps: int, device: torch.device, encoder=get_few_shot_encoder_basic):
         """Creates a Matching Network as described in Vinyals et al.
 
         # Arguments:
@@ -83,7 +87,7 @@ class MatchingNetwork(nn.Module):
         self.q = q
         self.fce = fce
         self.num_input_channels = num_input_channels
-        self.encoder = get_few_shot_encoder(self.num_input_channels)
+        self.encoder = encoder(self.num_input_channels)
         if self.fce:
             self.g = BidrectionalLSTM(lstm_input_size, lstm_layers).to(device)
             self.f = AttentionLSTM(lstm_input_size, unrolling_steps=unrolling_steps).to(device)
