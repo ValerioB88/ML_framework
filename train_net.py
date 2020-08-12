@@ -130,7 +130,7 @@ def matching_net_predictions(attention: torch.Tensor, n: int, k: int, q: int, us
 
 def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries, distance='l2', fce=False):
     logs = {}
-    x, y, more = data
+    x, y_real_labels, more = data
     if train:
         model.train()
         optimizer.zero_grad()
@@ -144,6 +144,8 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     # k lots of q query samples from those classes
     support = embeddings[:n_shot * k_way]
     queries = embeddings[n_shot * k_way:]
+    selected_classes = y_real_labels[n_shot * k_way::n_shot]
+    queries_real_labels = y_real_labels[n_shot * k_way:]
 
     if fce:
         support, _, _ = model.g(support.unsqueeze(1))
@@ -162,7 +164,7 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     y_pred = matching_net_predictions(attention, n_shot, k_way, q_queries, use_cuda)
     clipped_y_pred = y_pred.clamp(EPSILON, 1 - EPSILON)
     _, predicted = torch.max(y_pred, 1)
-
+    prediction_real_labels = selected_classes[predicted]
     # CrossEntropy is log softmax + NLLLoss. Here we do them separately.
     loss = loss_fn(make_cuda(clipped_y_pred.log(), use_cuda), make_cuda(y, use_cuda))
 
@@ -170,7 +172,7 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         loss.backward()
         clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
-    return loss, y, predicted, logs
+    return loss, queries_real_labels, prediction_real_labels, logs
 
 
 def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, iteration_step_kwargs=None, epochs=20):

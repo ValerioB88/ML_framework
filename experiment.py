@@ -491,5 +491,5 @@ class MatchingNetExp(Experiment):
                    iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q},
                    epochs=epochs)
 
-    def _get_num_classes(self, loader):
-        return self.k
+    # def _get_num_classes(self, loader):
+    #     return self.k

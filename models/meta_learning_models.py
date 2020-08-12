@@ -45,7 +45,10 @@ class MatchingNetPlus(nn.Module):
     @staticmethod
     def evaluator(k_way, n_shot):
         return nn.Sequential(
-         conv_block(k_way * n_shot, 64)
+                    conv_block(k_way * n_shot, 64),
+                    conv_block(64, 64),
+                    nn.Linear(224 * 224 * 3, 2500),
+                    nn.ReLU(True),
 
         )
     # def forward(self, x):
