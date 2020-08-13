@@ -143,11 +143,11 @@ def matching_net_step_plus(data, model, loss_fn, optimizer, use_cuda, train, n_s
     # k lots of q query samples from those classes
     support = embeddings[:n_shot * k_way]
     queries = embeddings[n_shot * k_way:]
-    t = make_cuda(torch.tensor([]), use_cuda)
+    support_and_test = make_cuda(torch.tensor([]), use_cuda)
     for q in queries:
-        t = torch.cat((t, torch.cat((support, make_cuda(torch.unsqueeze(q, 0), use_cuda)))), dim=1)
+        support_and_test = torch.cat((support_and_test, torch.cat((support, make_cuda(torch.unsqueeze(q, 0), use_cuda))).flatten(start_dim=0, end_dim=1).unsqueeze(0)), dim=0)
 
-    support_and_test = t.permute(dims=[1, 0, 2, 3])
+    # support_and_test = support_and_test.permute(dims=[1, 0, 2, 3])
     output = model.evaluator(support_and_test)
 
     _, predicted = torch.max(output, 1)

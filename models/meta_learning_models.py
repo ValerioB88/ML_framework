@@ -31,7 +31,7 @@ def get_few_shot_evaluator(input_channels, output):
     )
 
 
-def get_few_shot_encoder(num_input_channels=1, flatten=True) -> nn.Module:
+def get_few_shot_encoder(num_input_channels=1, output=64, flatten=True) -> nn.Module:
     """Creates a few shot encoder as used in Matching and Prototypical Networks
 
     # Arguments:
@@ -47,18 +47,21 @@ def get_few_shot_encoder(num_input_channels=1, flatten=True) -> nn.Module:
                     conv_block(512, 512),
                     Flatten()]
                    if flatten else
-                   [conv_block(128, 1)])
+                   [conv_block(128, output)])
     return nn.Sequential(*modules)
 
 class MatchingNetPlus(nn.Module):
+
+    output_filters = 64
+
     def __init__(self,  n: int, k: int, q: int, num_input_channels: int):
         super().__init__()
         self.n = n
         self.k = k
         self.q = q
         self.num_input_channels = num_input_channels
-        self.encoder = get_few_shot_encoder(num_input_channels, flatten=False)
-        self.evaluator = get_few_shot_evaluator(self.k * self.n + 1, self.k)
+        self.encoder = get_few_shot_encoder(num_input_channels, output=self.output_filters, flatten=False)
+        self.evaluator = get_few_shot_evaluator((self.k * self.n + 1) * self.output_filters, self.k)
 
 
 
