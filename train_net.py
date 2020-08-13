@@ -145,7 +145,8 @@ def matching_net_step_plus(data, model, loss_fn, optimizer, use_cuda, train, n_s
     queries = embeddings[n_shot * k_way:]
     support_and_test = make_cuda(torch.tensor([]), use_cuda)
     for q in queries:
-        support_and_test = torch.cat((support_and_test, torch.cat((support, make_cuda(torch.unsqueeze(q, 0), use_cuda))).flatten(start_dim=0, end_dim=1).unsqueeze(0)), dim=0)
+        # support_and_test = torch.cat((support_and_test, torch.cat((support, make_cuda(torch.unsqueeze(q, 0), use_cuda))).flatten(start_dim=0, end_dim=1).unsqueeze(0)), dim=0)
+        support_and_test = torch.cat((support_and_test, torch.cat((support.flatten(), make_cuda(q, use_cuda))).unsqueeze(0)))
 
     # support_and_test = support_and_test.permute(dims=[1, 0, 2, 3])
     output = model.evaluator(support_and_test)
@@ -228,6 +229,7 @@ def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer
     make_cuda(net, use_cuda)
 
     callbacks = CallbackList(callbacks)
+    callbacks.set_model(net)
     batch_logs = {}
 
     callbacks.on_train_begin()

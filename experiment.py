@@ -133,7 +133,8 @@ class Experiment(ABC):
                                        metrics_prefix='nept'),
                        RollingAccEachClassNeptune(log_every=nept_check_every,
                                                   num_classes=num_classes,
-                                                  neptune_text=log_text)
+                                                  neptune_text=log_text),
+                       PlotGradientNeptune(net=net, log_every=50, plot_every=500, log_txt=log_text),
                        ]
 
         return all_cb

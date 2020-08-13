@@ -655,7 +655,7 @@ class ComputeConfMatrix(Callback):
             plt.ylabel('truth')
             plt.xlabel('predicted')
             plt.title(self.neptune_text + ' last {} iters'.format(self.num_iter))
-            neptune.log_image('{} Confusion Matrix'.format(self.neptune_text), figure)
+            neptune.log_image('Confusion Matrix [{}]'.format(self.neptune_text), figure)
 
 
 class RollingAccEachClassNeptune(Callback):
@@ -791,3 +791,44 @@ class CompConfMatrixFewShot(ComputeConfMatrix):
         for t, p in zip(logs['y_true_real_lab'].view(-1), logs['y_pred_real_lab'].view(-1)):
             self.confusion_matrix[t.long(), p.long()] += 1
         self.num_iter += 1
+
+
+class PlotGradientNeptune(Callback):
+    grad = []
+    layers = []
+
+    def __init__(self, net, log_every=50, plot_every=500, log_txt=''):
+        self.log_every = log_every
+        self.plot_every = plot_every
+        self.log_txt = log_txt
+        self.net = net
+        super().__init__()
+        for n, p in self.net.named_parameters():
+            if p.requires_grad and ("bias" not in n):
+                self.layers.append(n)
+        self.layers = [i.split('.weight')[0] for i in self.layers]
+
+    def on_training_step_end(self, batch, logs=None):
+        if batch % self.log_every == 0:
+            ave_grads = []
+            for n, p in self.net.named_parameters():
+                if p.requires_grad and ("bias" not in n):
+                    ave_grads.append(p.grad.abs().mean())
+            self.grad.append(ave_grads)
+
+        if batch % self.plot_every == 0:
+            lengrad = len(self.grad[0])
+            figure = plt.figure(figsize=(10, 7))
+            plt.plot(np.array(self.grad).T, alpha=0.3, color="b")
+            plt.hlines(0, 0, lengrad + 1, linewidth=1, color="k")
+            plt.xticks(range(0, lengrad, 1), self.layers, rotation=35)
+            plt.xlim(xmin=0, xmax=lengrad)
+            plt.xlabel("Layers")
+            plt.ylabel("average gradient")
+            plt.title("Gradient flow iter{}".format(logs['tot_iter']))
+            plt.grid(True)
+            neptune.log_image('Gradient Plot [{}]'.format(self.log_txt), figure)
+            self.grad = []
+
+
+

@@ -19,9 +19,9 @@ def get_few_shot_encoder_basic(num_input_channels=1) -> nn.Module:
 
 def get_few_shot_evaluator(input_channels, output):
     return nn.Sequential(
-        conv_block(input_channels, 64),
-        Flatten(),
-        nn.Linear(1024, 512),
+        # conv_block(input_channels, 64),
+        # Flatten(),
+        nn.Linear(input_channels, 512),
         nn.ReLU(True),
         nn.Dropout(),
         nn.Linear(512, 256),
@@ -60,8 +60,8 @@ class MatchingNetPlus(nn.Module):
         self.k = k
         self.q = q
         self.num_input_channels = num_input_channels
-        self.encoder = get_few_shot_encoder(num_input_channels, output=self.output_filters, flatten=False)
-        self.evaluator = get_few_shot_evaluator((self.k * self.n + 1) * self.output_filters, self.k)
+        self.encoder = get_few_shot_encoder(num_input_channels, flatten=True)  #output=self.output_filters, flatten=True)
+        self.evaluator = get_few_shot_evaluator((self.k * self.n + 1) * 512 * 4, self.k)
 
 
 
