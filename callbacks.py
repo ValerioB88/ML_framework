@@ -674,7 +674,7 @@ class RollingAccEachClassNeptune(Callback):
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
             if correct_class is not None:
                 for idx, cc in enumerate(correct_class.numpy()):
-                    neptune.send_metric(f'Training {idx} Class Acc - [{self.neptune_text}]', cc * 100)
+                    neptune.send_metric(f'Training {idx} Class Acc - [{self.neptune_text}]', cc * 100 if cc is not None else -1)
 
 
 class PlotTimeElapsed(Callback):
