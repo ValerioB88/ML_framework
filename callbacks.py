@@ -556,7 +556,7 @@ class SaveModel(Callback):
             pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
             print('Saving model in {}'.format(self.output_path))
             torch.save(self.net.state_dict(), self.output_path)
-            neptune.log_artifact(self.output_path, self.output_path) if self.log_in_neptune else None 
+            # neptune.log_artifact(self.output_path, self.output_path) if self.log_in_neptune else None
 
 
 class Metrics(Callback):
@@ -656,6 +656,7 @@ class ComputeConfMatrix(Callback):
             plt.xlabel('predicted')
             plt.title(self.neptune_text + ' last {} iters'.format(self.num_iter))
             neptune.log_image('Confusion Matrix [{}]'.format(self.neptune_text), figure)
+            plt.close()
 
 
 class RollingAccEachClassNeptune(Callback):
@@ -780,6 +781,7 @@ class ComputeDataframe(Callback):
             cbar = fig.colorbar(im)
             cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)
             neptune.log_image('{} Density Plot Accuracy'.format(self.log_text_plot), fig)
+            plt.close()
 
         logs['dataframe'] = data_frame
 
@@ -829,6 +831,7 @@ class PlotGradientNeptune(Callback):
             plt.grid(True)
             neptune.log_image('Gradient Plot [{}]'.format(self.log_txt), figure)
             self.grad = []
+            plt.close()
 
 
 

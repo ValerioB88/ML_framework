@@ -45,7 +45,7 @@ class Experiment(ABC):
             print('Using cuda - you are probably on the server')
             self.use_cuda = True
 
-        list_tags = [name_experiment]
+        list_tags = [name_experiment] if name_experiment != '' else []
         if self.additional_tags is not None:
             [list_tags.append(i) for i in self.additional_tags.split('_')]
         list_tags.append('van') if self.pretraining == 'vanilla' else None
@@ -114,6 +114,11 @@ class Experiment(ABC):
                                 metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
                                 check_every=nept_check_every if self.use_neptune
                                 else console_check_every),
+                  EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max',
+                                reaching_goal=None,
+                                metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
+                                check_every=nept_check_every if self.use_neptune
+                                else console_check_every),  # for stagnationli
                   StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
                                       to_neptune=self.use_neptune, log_text=log_text),

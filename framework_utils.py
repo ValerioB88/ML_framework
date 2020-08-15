@@ -425,6 +425,7 @@ def imshow_batch(inp, mean=None, std=None, title_lab=None, title_more=''):
             plt.title(str(title_lab[idx].item()) + ' ' + (title_more[idx] if title_more != '' else ''))
 
     plt.pause(0.1)
+    plt.tight_layout()
     return fig
 
 
