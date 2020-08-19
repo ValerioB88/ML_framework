@@ -227,32 +227,26 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         optimizer.zero_grad()
     else:
         model.eval()
-    embeddings = model.encoder(make_cuda(x, use_cuda))
     y_onehot = torch.zeros(q_queries * k_way, k_way)
-    # y_onehot = torch.zeros(k_way * n_shot, k_way)
-
     y = torch.arange(0, k_way, 1 / q_queries)
-    # y_output = torch.arange(0, k_way, 1 / (q_queries * k_way)).long()
-
     y_onehot = y_onehot.scatter(1, y.unsqueeze(-1).long(), 1)
 
+    embeddings = model.encoder(make_cuda(x, use_cuda))
     # Samples are ordered by the NShotWrapper class as follows:
     # k lots of n support samples from a particular class
     # k lots of q query samples from those classes
     support = embeddings[:n_shot * k_way]
     queries = embeddings[n_shot * k_way:]
 
-    loss_sum = 0
-    pred_queries = []
-    batch = torch.tensor([])
+    batch = make_cuda(torch.tensor([]), use_cuda)
     # sum across n_shots
-    summed_supp = support.view(k_way, n_shot, *support.size()[-3:]).sum(dim=1)
+    summed_supp = support.view(n_shot, k_way, *support.size()[-3:]).sum(dim=0)
     for idx, q in enumerate(queries):
         # K_WAY x 64 * (K_WAY + 1) x 56 x 56
         episode = torch.cat((summed_supp, q.expand(5, -1, -1, -1)), dim=1)
-        batch = torch.cat((batch, episode))
+        batch = torch.cat((batch, make_cuda(episode, use_cuda)))
 
-    output = model.relation_net(batch).reshape((5, -1))
+    output = model.relation_net(batch).view((5, -1))
 
     loss = loss_fn(make_cuda(output, use_cuda),
                    make_cuda(y_onehot, use_cuda))
@@ -260,7 +254,7 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     _, predicted = output.max(dim=0)
 
     selected_classes = y_real_labels[n_shot * k_way::q_queries]
-    prediction_real_labels = selected_classes[pred_queries]
+    prediction_real_labels = selected_classes[predicted]
     queries_real_labels = y_real_labels[n_shot * k_way:]
     logs['output'] = output
     logs['more'] = more
@@ -270,7 +264,7 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
 
     if train:
         loss.backward()
-        clip_grad_norm_(model.parameters(), 1)
+        clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
     return loss, y, predicted, logs
 

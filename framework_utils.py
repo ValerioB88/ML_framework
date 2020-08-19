@@ -92,8 +92,9 @@ def parse_few_shot_learning_parameters(parser=None):
                         type=str,
                         default=None)
     parser.add_argument("-testf", "--folder_for_testing",
-                        help="Select the folder for testing this network.",
+                        help="Select the folder(s) for testing this network.",
                         type=str,
+                        nargs='+',
                         default=None)
     parser.add_argument("-n_shot", "--n_shot",
                         help="images for each classes for meta-training.",

@@ -7,12 +7,13 @@ import argparse
 from torch.optim import Adam
 from abc import ABC, abstractmethod
 from typing import Dict, List, Callable, Union
+from torch.nn.modules.loss import MSELoss, CrossEntropyLoss, NLLLoss
 
 from callbacks import *
 import framework_utils as utils
-from models.meta_learning_models import MatchingNetwork, MatchingNetPlus, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
+from models.meta_learning_models import MatchingNetwork, MatchingNetPlus, RelationNetSung, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
 from models.FCnets import FC4
-from train_net import matching_net_step, run, standard_net_step, matching_net_step_plus
+from train_net import *
 
 
 class Experiment(ABC):
@@ -114,11 +115,11 @@ class Experiment(ABC):
                                 metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
                                 check_every=nept_check_every if self.use_neptune
                                 else console_check_every),
-                  EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max',
+                  EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='min',
                                 reaching_goal=None,
-                                metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
+                                metric_name='nept/mean_loss' if self.use_neptune else 'cnsl/mean_loss',
                                 check_every=nept_check_every if self.use_neptune
-                                else console_check_every),  # for stagnationli
+                                else console_check_every),  # for stagnation
                   StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
                                       to_neptune=self.use_neptune, log_text=log_text),
@@ -219,9 +220,9 @@ class Experiment(ABC):
             cloudpickle.dump(self.experiment_data, open(result_path_data, 'wb'))
             cloudpickle.dump(self.experiment_loaders, open(result_path_loaders, 'wb'))
             print('Saved data in {}, \nSaved loaders in {}'.format(result_path_data, result_path_loaders))
-            if self.use_neptune:
-                neptune.log_artifact(result_path_data, result_path_data)
-                neptune.log_artifact(result_path_loaders, result_path_loaders)
+            # if self.use_neptune:
+            #     neptune.log_artifact(result_path_data, result_path_data)
+            #     neptune.log_artifact(result_path_loaders, result_path_loaders)
         else:
             Warning('Results path is not specified!')
 
@@ -459,7 +460,7 @@ class StandardTrainingExperiment(Experiment):
         return network, params_to_update
 
 
-class MatchingNetExp(Experiment):
+class FewShotLearningExp(Experiment):
     '''
     Select network_name = 'matching_net_basics' for using the basic network that works for any image size, used in the paper for Omniglot.
                         'matching_net_more' to use a more complex version of the matching net, with more conv layer. It can still accept any type of input
@@ -499,7 +500,7 @@ class MatchingNetExp(Experiment):
                                   device=device,
                                   encoder=get_few_shot_encoder_basic)
             self.step = matching_net_step
-            self.lossfn = torch.nn.NLLLoss()
+            self.lossfn = NLLLoss()
         if network_name == 'matching_net_more':
             net = MatchingNetwork(self.n, self.k, self.q, fce=False,
                                   num_input_channels=1 if grayscale else 3,
@@ -515,8 +516,12 @@ class MatchingNetExp(Experiment):
             net = MatchingNetPlus(self.n, self.k, self.q,
                                   num_input_channels=1 if grayscale else 3)
             self.step = matching_net_step_plus
-            self.lossfn = torch.nn.CrossEntropyLoss()
+            self.lossfn = CrossEntropyLoss()
 
+        if network_name == 'relation_net':
+            net = RelationNetSung(size_canvas=self.size_canvas)
+            self.step = relation_net_step
+            self.lossfn = MSELoss()
         print('***Network***')
         print(net)
         return net, net.parameters()
@@ -542,15 +547,16 @@ class MatchingNetExp(Experiment):
 
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
         all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
-        idx_cd = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeDataframe)]
-        assert len(idx_cd) == 1
-        all_cb[idx_cd[0]] = ComputeDataframe(self.k,
-                                            self.use_cuda,
-                                            translation_type_str,
-                                            self.network_name, self.size_canvas,
-                                            log_density_neptune=True if self.use_neptune else False,
-                                            log_text_plot=log_text,
-                                            output_and_softmax=False)
+        if save_dataframe:
+            idx_cd = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeDataframe)]
+            assert len(idx_cd) <= 1
+            all_cb[idx_cd[0]] = ComputeDataframe(self.k,
+                                                self.use_cuda,
+                                                translation_type_str,
+                                                self.network_name, self.size_canvas,
+                                                log_density_neptune=True if self.use_neptune else False,
+                                                log_text_plot=log_text,
+                                                output_and_softmax=False)
 
         idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
         assert len(idx_ccm) == 1

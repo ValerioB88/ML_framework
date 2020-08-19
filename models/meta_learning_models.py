@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch
 from models.model_utils import Flatten, conv_block
 import torch.nn.functional as F
+import numpy as np
 
 
 def get_few_shot_encoder_basic(num_input_channels=1) -> nn.Module:
@@ -53,16 +54,17 @@ def get_few_shot_encoder(num_input_channels=1, output=64, flatten=True) -> nn.Mo
 
 
 class RelationNetSung(nn.Module):
-    def __init__(self, output_encoder=64):
+    def __init__(self, output_encoder=64, size_canvas=(224, 224)):
+        flatten_size = (np.multiply(*np.array(size_canvas)/np.power(2, 6)) * 64).astype(int)
         super().__init__()
         self.encoder = nn.Sequential(conv_block(3, 64),
                                      conv_block(64, 64),
-                                     conv_block(64, 64, max_pool=False),
-                                     conv_block(64, output_encoder, max_pool=False))
+                                     conv_block(64, 64, max_pool=True),
+                                     conv_block(64, output_encoder, max_pool=True))
         self.relation_net = nn.Sequential(conv_block(2 * 64, 64),
                                           conv_block(64, 64),
                                           Flatten(),
-                                          nn.Linear(64 * 14 * 14, 8),
+                                          nn.Linear(flatten_size, 8),
                                           nn.ReLU(True),
                                           nn.Linear(8, 1),
                                           nn.Sigmoid())

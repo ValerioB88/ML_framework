@@ -487,7 +487,8 @@ class EarlyStopping(Callback):
         if patience == 0:
             self.is_better = lambda a, b: True
             self.step = lambda a: False
-        print(f'Set up early stopping with metric [{self.metric_name}] < {self.reaching_goal}, checking every [{self.check_every}], patience [{patience}]')
+        self.string = f'metric [{self.metric_name}] < {self.reaching_goal if self.reaching_goal is not None else self.mode}, checking every [{self.check_every}], patience [{patience}]'
+        print(f'Set up early stopping with {self.string}')
 
     def on_batch_end(self, batch, logs=None):
         if batch % self.check_every == 0:
@@ -512,7 +513,7 @@ class EarlyStopping(Callback):
 
             if self.num_bad_epochs >= self.patience:
                 logs['stop'] = True
-                print('Early Stopping')
+                print(f'Early Stopping: {self.string}')
 
 
     def _init_is_better(self, mode, min_delta, percentage):
@@ -587,7 +588,7 @@ class RunningMetrics(Metrics):
     def compute_mean_loss_acc(self):
         mean_loss = self.running_loss / self.log_every
         mean_acc = 100 * self.correct_train / self.total_samples
-        return mean_loss, mean_acc
+        return mean_loss.item(), mean_acc
 
     def init_classic_logs(self):
         self.correct_train, self.total_samples, self.running_loss = 0, 0, 0
@@ -675,7 +676,7 @@ class RollingAccEachClassNeptune(Callback):
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
             if correct_class is not None:
                 for idx, cc in enumerate(correct_class.numpy()):
-                    neptune.send_metric(f'Training {idx} Class Acc - [{self.neptune_text}]', cc * 100 if cc is not None else -1)
+                    neptune.send_metric(f'Training {idx} Class Acc - [{self.neptune_text}]', cc * 100 if not np.isnan(cc) else -1)
 
 
 class PlotTimeElapsed(Callback):
