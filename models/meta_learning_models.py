@@ -37,6 +37,7 @@ def get_few_shot_encoder(num_input_channels=1, output=64, flatten=True) -> nn.Mo
     # Arguments:
         num_input_channels: Number of color channels the model expects input data to contain. Omniglot = 1,
             miniImageNet = 3
+    For Omniglot (input 28x28) the output of the max pooling is 64x1x1, so for 224 images should be 64x8x8
     """
 
     modules = [conv_block(num_input_channels, 64),
@@ -49,6 +50,23 @@ def get_few_shot_encoder(num_input_channels=1, output=64, flatten=True) -> nn.Mo
                    if flatten else
                    [conv_block(128, output)])
     return nn.Sequential(*modules)
+
+
+class RelationNetSung(nn.Module):
+    def __init__(self, output_encoder=64):
+        super().__init__()
+        self.encoder = nn.Sequential(conv_block(3, 64),
+                                     conv_block(64, 64),
+                                     conv_block(64, 64, max_pool=False),
+                                     conv_block(64, output_encoder, max_pool=False))
+        self.relation_net = nn.Sequential(conv_block(2 * 64, 64),
+                                          conv_block(64, 64),
+                                          Flatten(),
+                                          nn.Linear(64 * 14 * 14, 8),
+                                          nn.ReLU(True),
+                                          nn.Linear(8, 1),
+                                          nn.Sigmoid())
+
 
 class MatchingNetPlus(nn.Module):
 
@@ -84,7 +102,7 @@ class MatchingNetwork(nn.Module):
             unrolling_steps: Number of unrolling steps to run the Attention LSTM
             device: Device on which to run computation
         """
-        super(MatchingNetwork, self).__init__()
+        super().__init__()
         self.n = n
         self.k = k
         self.q = q
