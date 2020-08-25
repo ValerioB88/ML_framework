@@ -90,10 +90,10 @@ class Experiment(ABC):
     @staticmethod
     def neptune_plot_generators_info(train_loader=None, test_loaders_list=None):
         if train_loader is not None:
-            utils.neptune_log_dataset_info(train_loader, log_text='training')
+            utils.neptune_log_dataset_info(train_loader, log_text=train_loader.dataset.name_generator)
         if test_loaders_list is not None:
             for loader in test_loaders_list:
-                utils.neptune_log_dataset_info(loader, log_text='testing')
+                utils.neptune_log_dataset_info(loader, log_text=loader.dataset.name_generator)
 
     @abstractmethod
     def call_run(self, train_loader, net, params_to_update, callbacks=None, train=True, epochs=20):
@@ -527,6 +527,10 @@ class FewShotLearningExp(Experiment):
         return net, net.parameters()
 
     def call_run(self, data_loader, net, params_to_update, callbacks=None, train=True, epochs=20):
+        if data_loader.dataset.num_classes < self.k:
+            warnings.warn(f'Experiment: Number of classes in the folder {data_loader.dataset.folder} < k ({self.k}. K will be changed to {data_loader.dataset.num_classes}')
+            self.k = data_loader.dataset.num_classes
+
         return run(data_loader, use_cuda=self.use_cuda, net=net,
                    callbacks=callbacks,
                    loss_fn=utils.make_cuda(self.lossfn, self.use_cuda),
