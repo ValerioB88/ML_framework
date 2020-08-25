@@ -115,7 +115,7 @@ class Experiment(ABC):
                                 metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
                                 check_every=nept_check_every if self.use_neptune
                                 else console_check_every),
-                  EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='min',
+                  EarlyStopping(min_delta=0.01, patience=300, percentage=True, mode='min',
                                 reaching_goal=None,
                                 metric_name='nept/mean_loss' if self.use_neptune else 'cnsl/mean_loss',
                                 check_every=nept_check_every if self.use_neptune

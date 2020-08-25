@@ -492,13 +492,16 @@ class EarlyStopping(Callback):
 
     def on_batch_end(self, batch, logs=None):
         if batch % self.check_every == 0:
-            metrics = logs[self.metric_name]
+            if self.metric_name in logs:
+                metrics = logs[self.metric_name]
+            else:
+                return True
             if self.best is None:
                 self.best = metrics
-                return False
+                return
 
             if np.isnan(metrics):
-                return True
+                return
             if self.reaching_goal is not None:
                 if self.is_better(metrics, self.best):
                     self.num_bad_epochs += 1
@@ -603,7 +606,7 @@ class StandardMetrics(RunningMetrics):
     def on_training_step_end(self, batch_index, batch_logs=None):
         super().on_batch_end(batch_index, batch_logs)
         self.update_classic_logs(batch_logs)
-        if batch_index % self.log_every == 0:
+        if batch_index % self.log_every == self.log_every - 1:
             batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc()
             if self.print_it:
                 print('[iter{}] loss: {}, train_acc: {}'.format(batch_logs['tot_iter'], batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
@@ -671,7 +674,7 @@ class RollingAccEachClassNeptune(Callback):
     def on_training_step_end(self, batch, logs=None):
         for t, p in zip(logs['y_true'].view(-1), logs['y_pred'].view(-1)):
             self.confusion_matrix[t.long(), p.long()] += 1
-        if batch % self.log_every:
+        if batch % self.log_every == self.log_every - 1:
             correct_class = self.confusion_matrix.diag() / self.confusion_matrix.sum(1)
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
             if correct_class is not None:

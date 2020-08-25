@@ -243,10 +243,10 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     summed_supp = support.view(n_shot, k_way, *support.size()[-3:]).sum(dim=0)
     for idx, q in enumerate(queries):
         # K_WAY x 64 * (K_WAY + 1) x 56 x 56
-        episode = torch.cat((summed_supp, q.expand(5, -1, -1, -1)), dim=1)
+        episode = torch.cat((summed_supp, q.expand(k_way, -1, -1, -1)), dim=1)
         batch = torch.cat((batch, make_cuda(episode, use_cuda)))
 
-    output = model.relation_net(batch).view((5, -1))
+    output = model.relation_net(batch).view((k_way, -1))
 
     loss = loss_fn(make_cuda(output, use_cuda),
                    make_cuda(y_onehot, use_cuda))
@@ -289,6 +289,7 @@ def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer
         callbacks.on_epoch_begin(epoch)
         print('epoch: {}'.format(epoch))
         for batch_index, data in enumerate(train_loader, 0):
+
             tot_iter += 1
             callbacks.on_batch_begin(batch_index)
 
