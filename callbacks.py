@@ -655,7 +655,7 @@ class ComputeConfMatrix(Callback):
 
         if self.send_to_neptune:
             figure = plt.figure(figsize=(10, 7))
-            sn.heatmap(logs['conf_mat_acc'], annot=True, annot_kws={"size": 16})  # font size
+            sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".1f", annot_kws={"size": 16})  # font size
             plt.ylabel('truth')
             plt.xlabel('predicted')
             plt.title(self.neptune_text + ' last {} iters'.format(self.num_iter))
@@ -780,7 +780,7 @@ class ComputeDataframe(Callback):
 
         if self.plot_density_on_neptune:
             mean_accuracy = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
-            ax, fig, im = framework_utils.imshow_density(mean_accuracy, lim=[1 / self.num_classes - 1 / self.num_classes * 0.2, 1], plot_args={'interpolate': True, 'size_canvas': self.size_canvas})
+            ax, fig, im = framework_utils.imshow_density(mean_accuracy, plot_args={'interpolate': True, 'size_canvas': self.size_canvas}, vmin=1 / self.num_classes - 1 / self.num_classes * 0.2, vmax=1)
             plt.title(self.log_text_plot)
             cbar = fig.colorbar(im)
             cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)

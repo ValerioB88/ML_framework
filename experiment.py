@@ -13,11 +13,16 @@ from callbacks import *
 import framework_utils as utils
 from models.meta_learning_models import MatchingNetwork, MatchingNetPlus, RelationNetSung, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
 from models.FCnets import FC4
+from models.ExtVGG16 import vgg16np
 from train_net import *
-
+import time
 
 class Experiment(ABC):
-    def __init__(self, name_experiment='default_name', parser=None, ):
+    def __init__(self, name_experiment='default_name', parser=None):
+        self.use_cuda = False
+        if torch.cuda.is_available():
+            print('Using cuda - you are probably on the server')
+            self.use_cuda = True
         parser = utils.parse_experiment_arguments(parser)
         PARAMS = vars(parser.parse_known_args()[0])
 
@@ -41,16 +46,14 @@ class Experiment(ABC):
         self.experiment_loaders = {}  # we separate data from loaders because loaders are pickled objects and may broke when module name changes. If this happens, at least we preserve the data. We generally don't even need the loaders much.
 
 
-        self.use_cuda = self.force_cuda
-        if torch.cuda.is_available():
-            print('Using cuda - you are probably on the server')
+        if self.force_cuda:
             self.use_cuda = True
 
         list_tags = [name_experiment] if name_experiment != '' else []
         if self.additional_tags is not None:
             [list_tags.append(i) for i in self.additional_tags.split('_')]
-        list_tags.append('van') if self.pretraining == 'vanilla' else None
-        list_tags.append('imgn') if self.pretraining == 'ImageNet' else None
+        list_tags.append('ptvanilla') if self.pretraining == 'vanilla' else None
+        list_tags.append('ptImageNet') if self.pretraining == 'ImageNet' else None
         list_tags.append(self.network_name)
         list_tags.append('lr{}'.format("{:2f}".format(self.learning_rate).split(".")[1])) if self.learning_rate is not None else None
         if self.size_object is not None:
@@ -59,7 +62,6 @@ class Experiment(ABC):
         else:
             list_tags.append('orsize')
 
-        self.batch_size = 32 if self.use_cuda else 4
         if self.max_iterations is None:
             self.max_iterations = 5000 if self.use_cuda else 10
 
@@ -73,12 +75,15 @@ class Experiment(ABC):
         print('Run Number {}'.format(self.current_run))
 
     def finalize_init(self, PARAMS, list_tags):
-        print(PARAMS)
+        print('***PARAMS***')
+        for i in sorted(PARAMS.keys()):
+            print(f'\t{i} : {PARAMS[i]}')
         self.initialize_neptune(PARAMS, list_tags) if self.use_neptune else None
         self.new_run()
 
     @staticmethod
     def initialize_neptune(PARAMS, list_tags):
+        a = time.time()
         neptune.init('valeriobiscione/valerioERC')
         try:
             neptune.create_experiment(name='',
@@ -86,6 +91,7 @@ class Experiment(ABC):
                                       tags=list_tags)
         except BaseException as e:
             print(e)
+        print('Neptune Initialize: {}'.format(time.time() - a))
 
     @staticmethod
     def neptune_plot_generators_info(train_loader=None, test_loaders_list=None):
@@ -94,6 +100,7 @@ class Experiment(ABC):
         if test_loaders_list is not None:
             for loader in test_loaders_list:
                 utils.neptune_log_dataset_info(loader, log_text=loader.dataset.name_generator)
+
 
     @abstractmethod
     def call_run(self, train_loader, net, params_to_update, callbacks=None, train=True, epochs=20):
@@ -157,7 +164,7 @@ class Experiment(ABC):
         all_cb = self.prepare_train_callbacks(net, log_text, self._get_num_classes(train_loader))
 
         all_cb += (callbacks or [])
-
+        assert self._get_num_classes(train_loader) == net.classifier[-1].out_features, f"Net output size [{net.classifier[-1].out_features}] doesn't match number of classes [{self._get_num_classes(train_loader)}]"
         net, logs = self.call_run(train_loader, net, params_to_update, train=True, callbacks=all_cb)
         return net
 
@@ -238,7 +245,8 @@ class StandardTrainingExperiment(Experiment):
     def __init__(self, name_experiment='standard_training', parser=None):
         parser = utils.parse_standard_training_arguments(parser)
         self.use_gap, self.feature_extraction, self.big_canvas, self.shallow_FC = False, False, False, False
-        self.size_canvas = 0
+        self.size_canvas = None
+        self.batch_size = None
         super().__init__(name_experiment=name_experiment, parser=parser)
 
     def finalize_init(self, PARAMS, list_tags):
@@ -247,10 +255,15 @@ class StandardTrainingExperiment(Experiment):
         self.big_canvas = PARAMS['big_canvas']
         self.shallow_FC = PARAMS['shallow_FC']
         self.size_canvas = (224, 224) if not self.big_canvas else (400, 400)
+        self.batch_size = PARAMS['batch_size']
+        if not self.use_cuda:
+            print(f'Not using cuda. Batch size changed from {self.batch_size} to 4')
+            self.batch_size = 4
         list_tags.append('gap') if self.use_gap else None
         list_tags.append('fe') if self.feature_extraction else None
         list_tags.append('bC') if self.big_canvas else None
         list_tags.append('shFC') if self.shallow_FC else None
+        list_tags.append(f'bs{self.batch_size}') if self.batch_size != 32 else None
         super().finalize_init(PARAMS, list_tags)
 
     def call_run(self, loader, net, params_to_update, train=True, callbacks=None, epochs=20):
@@ -288,6 +301,8 @@ class StandardTrainingExperiment(Experiment):
             network = torchvision.models.vgg16_bn(pretrained=False, progress=True, num_classes=num_classes)
         elif network == 'vgg16':
             network = torchvision.models.vgg16(pretrained=False, progress=True, num_classes=num_classes)
+        elif network == 'vgg16np':
+            network = vgg16np()
         elif network == 'resnet18':
             network = torchvision.models.resnet18(pretrained=False, progress=True, num_classes=num_classes)
         elif network == 'FC4':  # 2500, 2000, 1500, 1000, 500, 10
@@ -303,11 +318,18 @@ class StandardTrainingExperiment(Experiment):
         find_gap = 'gap1' in pretrain_path
         find_sFC = 'sFC1' in pretrain_path
         find_bC = 'bC1' in pretrain_path
+        isnp = re.findall(r'vgg[0-9]+np', pretrain_path)
+        find_NP = bool(isnp[0]) if isnp else False
+
         # Grayscale not implemented: grayscale is assumed to be FALSE at all time
         if type_net == TypeNet.VGG:
             if find_sFC:
-                print('**Pretraing model has a shallow FC!')
-                network.classifier = torch.nn.Linear(512 * 7 * 7, num_classes)
+                if find_NP:
+                    print('**Pretraing model has a shallow FC!')
+                    network.classifier = torch.nn.Linear(512 * 224 * 224, num_classes)
+                else:
+                    print('**Pretraing model has a shallow FC!')
+                    network.classifier = torch.nn.Linear(512 * 7 * 7, num_classes)
             else:
                 network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, find_ouptut)
             if find_gap:
@@ -321,6 +343,7 @@ class StandardTrainingExperiment(Experiment):
             if find_bC and not find_gap:
                 # if big_canvas, input is 400x400, and to obtain an AdaptiveAvgPool that does not
                 # do anything, we need a size of 12, 12
+                # ToDo: why not using a bigcanvas of 448 so everything is just double?!
                 network.avgpool = torch.nn.AdaptiveAvgPool2d((12, 12))
                 if find_sFC:
                     network.classifier = torch.nn.Linear(512 * 12 * 12, num_classes)
@@ -369,7 +392,6 @@ class StandardTrainingExperiment(Experiment):
     @staticmethod
     def feature_extraction_method(network, feature_extraction):
         params_to_update = network.parameters()
-        print("Params to learn:")
         if feature_extraction:
             for param in network.features.parameters():
                 param.requires_grad = False
@@ -380,10 +402,10 @@ class StandardTrainingExperiment(Experiment):
         return params_to_update
 
     @classmethod
-    def prepare_network(cls, network, num_classes, is_server=False, grayscale=False, use_gap=False, feature_extraction=False, pretraining='vanilla', big_canvas=False, shallow_FC=False):
+    def prepare_network(cls, network, num_classes, is_server=False, grayscale=False, use_gap=False, feature_extraction=False, pretraining='vanilla', big_canvas=False, shallow_FC=False, verbose=True):
         """
         @param network: this can be a string such as 'vgg16' or a torch.nn.Module
-        @param pretraining: can be [vanilla], [ImageNet]
+        @param pretraining: can be [vanilla], [ImageNet] or the path
         @return:
         """
 
@@ -412,7 +434,7 @@ class StandardTrainingExperiment(Experiment):
         pretrain_path = None
         if pretraining != 'vanilla':
             if pretraining == 'ImageNet':
-                pretrain_path = glob.glob('./models/ImageNet_{}*.pickle'.format(network))
+                pretrain_path = glob.glob('./models/ImageNet_{}_o1000.pickle'.format(network))
                 assert len(pretrain_path) <= 1, 'Found multiple matches for the pretraining network ImageNet {}'.format(network)
                 pretrain_path = pretrain_path[0]
             else:
@@ -423,7 +445,8 @@ class StandardTrainingExperiment(Experiment):
         # Remember that the network structure just created may have a different num_classes than the pretrained state dict we are loading here. If this is the case, call prepare_load and adjust the structure accordingly to match pretrained state dict. Then in model surgery we'll put the num_classes back.
         if pretrain_path is not None:
             network = cls.prepare_load(network, num_classes, pretrain_path, type_net)
-            print('Loaded model: {}'.format(pretrain_path))
+            if verbose:
+                print('Loaded model: {}'.format(pretrain_path))
             network.load_state_dict(torch.load(pretrain_path, map_location=torch.device('cuda' if is_server else 'cpu')))
 
         if type_net == TypeNet.VGG:
@@ -448,15 +471,18 @@ class StandardTrainingExperiment(Experiment):
                 m.track_running_stats = False
         # m.momentum = 0.4
 
-        for name, param in network.named_parameters():
-            if param.requires_grad == True:
-                print("\t", name)
+        if verbose:
+            print("Params to learn:")
+            for name, param in network.named_parameters():
+                if param.requires_grad == True:
+                    print("\t", name)
 
         if is_server:
             network.cuda()
 
-        print('***Network***')
-        print(network)
+        if verbose:
+            print('***Network***')
+            print(network)
         return network, params_to_update
 
 

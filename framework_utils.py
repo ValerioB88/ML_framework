@@ -134,6 +134,10 @@ def parse_standard_training_arguments(parser=None):
                         help="If true, will use 400x400 canvas (otherwise 224x224). The VGG network will be changed accordingly (we won't use the adaptive GAP)",
                         type=int,
                         default=0)
+    parser.add_argument("-batch", "--batch_size",
+                        help="batch_size",
+                        type=int,
+                        default=32)
 
     return parser
 
@@ -155,18 +159,32 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
     neptune.log_text('{} mean'.format(dataset_name), str(mean))
     neptune.log_text('{} std'.format(dataset_name), str(std))
     size_object = dataset.size_object if dataset.size_object is not None else (0, 0)
+
+    def draw_rect(canvas, range):
+        canvas = cv2.rectangle(canvas, (range[0], range[2]),
+                                       (range[1] - 1, range[3] - 1), (0, 0, 255), 2)
+        canvas = cv2.rectangle(canvas, (range[0] - size_object[0] // 2, range[2] - size_object[0] // 2),
+                                       (range[1] + size_object[1] // 2 - 1, range[3] + size_object[1] // 2 - 1), (0, 0, 240), 2)
+        return canvas
+
+    break_after_one = False
     if compute_my_generator_info:
-        if all(value == list( dataset.translations_range.values())[0] for value in  dataset.translations_range.values()):
-            break_after_one=True
+        if all(value == list(dataset.translations_range.values())[0] for value in dataset.translations_range.values()):
+            break_after_one = True
         for groupID, rangeC in dataset.translations_range.items():
             canvas = np.zeros(dataset.size_canvas) + 254
-            canvas = cv2.rectangle(canvas, (rangeC[0], rangeC[2]), (rangeC[1], rangeC[3]), (0, 0, 255), 2)
-            canvas = cv2.rectangle(canvas, (rangeC[0] - size_object[0] // 2, rangeC[2]-size_object[0] // 2), (rangeC[1]+size_object[1] // 2, rangeC[3]+size_object[1] // 2), (0, 0, 240), 2)
+            if isinstance(rangeC[0], tuple):
+                for r in rangeC:
+                    canvas = draw_rect(canvas, r)
+            else:
+                canvas = draw_rect(canvas, rangeC)
+
             neptune.log_image('{} AREA, [{}] '.format(log_text, dataset_name, translation_type_str), canvas)
             if break_after_one:
                 break
 
     iterator = iter(dataloader)
+    nc = dataloader.dataset.name_classes
     for i in range(1):
         try:
             images, labels, more = next(iterator)
@@ -175,7 +193,12 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
                 add_text = more['image_name']
 
             # neptune.log_image('{} example images: [{}], group {}'.format(log_text, dataset_name, lb),
-            [neptune.log_image('{} example images: [{}]'.format(log_text, dataset_name), convert_normalized_tensor_to_plottable_array(im, mean, std, text=str(lb) + ' ' + os.path.splitext(n)[0])) for im, lb, n in zip(images, labels.numpy(), add_text)]
+            [neptune.log_image('{} example images: [{}]'.format(log_text, dataset_name),
+                               convert_normalized_tensor_to_plottable_array(im, mean, std,
+                                                                                    text=f'{str(lb)}' +
+                                                                                         (f':"{nc[lb]}"' if nc[lb] != str(lb) else '') +
+                                                                                         os.path.splitext(n)[0]))
+             for im, lb, n in zip(images, labels.numpy(), add_text)]
         except StopIteration:
             Warning('Iteration stopped when plotting [{}] on Neptune'.format(dataset_name))
 
@@ -213,7 +236,7 @@ def copy_img_in_center_canvas(image: Image, size_canvas):
     return canvas
 
 
-def copy_img_in_canvas(image: Image, size_canvas, position, color_canvas='white'):
+def copy_img_in_canvas(image: Image, size_canvas: tuple, position, color_canvas='white'):
     """
     Place an image in the center of a bigger canvas
     @param image:
@@ -223,10 +246,10 @@ def copy_img_in_canvas(image: Image, size_canvas, position, color_canvas='white'
     if isinstance(color_canvas, int):
         color_canvas = (color_canvas, ) * 3
     # Put the image in a big canvas
-    canvas = Image.new('RGBA', tuple(size_canvas), color_canvas)
+    canvas = Image.new('RGBA', size_canvas, color_canvas)
     # Resize the target image
     size_image = np.array(image.size)
-    left, up = (position - size_image / 2).astype(int)
+    left, up = position - size_image // 2
     bottom, right = np.array([left, up]) + size_image
     canvas.paste(image, (left, up, bottom, right), image if np.shape(image)[-1] == 4 else None)
     canvas = canvas.convert('RGB')
@@ -378,7 +401,7 @@ def convert_normalized_tensor_to_plottable_figure(tensor, mean, std, title_lab=N
 def convert_normalized_tensor_to_plottable_array(tensor, mean, std, text):
     image = conver_tensor_to_plot(tensor, mean, std)
     canvas_size = np.shape(image)
-    font_scale = np.ceil(canvas_size[1])/100
+    font_scale = np.ceil(canvas_size[1])/150
     font = cv2.QT_FONT_NORMAL
     umat = cv2.UMat(image * 255)
     umat = cv2.putText(cv2.UMat(umat), text=text, org=(0, int(canvas_size[1] - 3)), fontFace=font, fontScale=font_scale, color=[0, 0, 0], lineType=cv2.LINE_AA, thickness=6)
@@ -474,14 +497,15 @@ def compute_density(values, plot_args=None):
     return canvas
 
 
-def imshow_density(values, ax=None, lim=[-1, 1], plot_args=None):
+def imshow_density(values, ax=None, plot_args=None, **kwargs):
     fig = None
+    cmap = 'viridis' if 'cmap' not in kwargs else kwargs['cmap']
     if ax is None:
         fig, ax = plt.subplots(1, 1)
     canvas = compute_density(values, plot_args)
-    cm = plt.get_cmap('viridis')
+    cm = plt.get_cmap(cmap)
     canvas = cm(canvas)
-    im = ax.imshow(canvas, vmin=lim[0], vmax=lim[1])
+    im = ax.imshow(canvas, **kwargs)
 
     # TODO: This hasattr has to be done because the dataset structure changed. If you re-run all the experiments then you can delete the first part, hasattr(.., 'minX')
     if 'dataset' in list(plot_args.keys()):
