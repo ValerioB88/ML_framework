@@ -483,11 +483,11 @@ class EarlyStopping(Callback):
         if reaching_goal is not None:
             self.best = reaching_goal
             # self.mode = 'min'
-
+        self.patience = self.patience // self.check_every
         if patience == 0:
             self.is_better = lambda a, b: True
             self.step = lambda a: False
-        self.string = f'metric [{self.metric_name}] < {self.reaching_goal if self.reaching_goal is not None else self.mode}, checking every [{self.check_every}], patience [{patience}]'
+        self.string = f'metric [{self.metric_name}] < {self.reaching_goal if self.reaching_goal is not None else self.mode}, checking every [{self.check_every} batch iters], patience: {self.patience} [corresponding to [{patience}] batch iters]'
         print(f'Set up early stopping with {self.string}')
 
     def on_batch_end(self, batch, logs=None):
@@ -640,7 +640,6 @@ class ComputeConfMatrix(Callback):
         self.reset_every = reset_every
         self.num_iter = 0
         super().__init__()
-
 
     def on_training_step_end(self, batch, logs=None):
         if self.reset_every is not None and batch % self.reset_every == 0:

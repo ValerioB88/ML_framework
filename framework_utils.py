@@ -179,7 +179,7 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
             else:
                 canvas = draw_rect(canvas, rangeC)
 
-            neptune.log_image('{} AREA, [{}] '.format(log_text, dataset_name, translation_type_str), canvas)
+            neptune.log_image('{} AREA, [{}] '.format(log_text, dataset_name, translation_type_str), canvas.astype(np.uint8))
             if break_after_one:
                 break
 
@@ -188,17 +188,21 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
     for i in range(1):
         try:
             images, labels, more = next(iterator)
+            images = images[0:np.max((4, len(images)))]
+            labels = labels[0:np.max((4, len(labels)))]
+            # more = more[0:np.max((4, len(more)))]
+
             add_text = [''] * len(labels)
             if 'image_name' in list(more.keys()):
                 add_text = more['image_name']
 
-            # neptune.log_image('{} example images: [{}], group {}'.format(log_text, dataset_name, lb),
             [neptune.log_image('{} example images: [{}]'.format(log_text, dataset_name),
-                               convert_normalized_tensor_to_plottable_array(im, mean, std,
+                               (convert_normalized_tensor_to_plottable_array(im, mean, std,
                                                                                     text=f'{str(lb)}' +
                                                                                          (f':"{nc[lb]}"' if nc[lb] != str(lb) else '') +
-                                                                                         os.path.splitext(n)[0]))
+                                                                                         os.path.splitext(n)[0])).astype(np.uint8))
              for im, lb, n in zip(images, labels.numpy(), add_text)]
+
         except StopIteration:
             Warning('Iteration stopped when plotting [{}] on Neptune'.format(dataset_name))
 
@@ -409,7 +413,7 @@ def convert_normalized_tensor_to_plottable_array(tensor, mean, std, text):
                 fontFace=font, fontScale=font_scale, color=[255, 255, 255], lineType=cv2.LINE_AA, thickness=1)
     # cv2.imshow('ciao', image)
     image = cv2.UMat.get(umat)
-    image = np.array(image, np.int64)
+    image = np.array(image, np.int8)
     # plt.imshow(image)
     return image
 

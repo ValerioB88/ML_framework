@@ -54,7 +54,6 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
     else:
         model.eval()
 
-    optimizer.zero_grad()
     output_batch = model(make_cuda(images, use_cuda))
     loss = loss_fn(make_cuda(output_batch, use_cuda),
                    make_cuda(labels, use_cuda))

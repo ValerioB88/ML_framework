@@ -85,13 +85,15 @@ class Experiment(ABC):
     def initialize_neptune(PARAMS, list_tags):
         a = time.time()
         neptune.init('valeriobiscione/valerioERC')
+        print('Neptune Initialize: {}'.format(time.time() - a))
+        a = time.time()
         try:
             neptune.create_experiment(name='',
                                       params=PARAMS,
                                       tags=list_tags)
         except BaseException as e:
             print(e)
-        print('Neptune Initialize: {}'.format(time.time() - a))
+        print('Neptune Creation: {}'.format(time.time() - a))
 
     @staticmethod
     def neptune_plot_generators_info(train_loader=None, test_loaders_list=None):
@@ -117,12 +119,12 @@ class Experiment(ABC):
                                   use_cuda=self.use_cuda,
                                   to_neptune=False, log_text=log_text,
                                   metrics_prefix='cnsl'),
-                  EarlyStopping(min_delta=0.01, patience=150, percentage=True, mode='max',
+                  EarlyStopping(min_delta=0.01, patience=800, percentage=True, mode='max',
                                 reaching_goal=self.stop_when_train_acc_is,
                                 metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
                                 check_every=nept_check_every if self.use_neptune
                                 else console_check_every),
-                  EarlyStopping(min_delta=0.01, patience=300, percentage=True, mode='min',
+                  EarlyStopping(min_delta=0.01, patience=800, percentage=True, mode='min',
                                 reaching_goal=None,
                                 metric_name='nept/mean_loss' if self.use_neptune else 'cnsl/mean_loss',
                                 check_every=nept_check_every if self.use_neptune
