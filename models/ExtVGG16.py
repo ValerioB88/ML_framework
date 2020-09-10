@@ -4,7 +4,7 @@ import torch
 
 def vgg16np(**kwargs):
     # cfg = [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M'],
-    cfg = [64, 64, 128, 128, 256, 256, 256, 512, 512, 512, 512, 512, 512]
+    cfg = [64, 64, 128, 128, 256, 256, 256, 512, 512, 512, 256, 128, 64]  # notice how we change the last filter num to fit model in memory!
     kwargs['init_weights'] = True
     model = VGG_NoPooling(make_layers(cfg, batch_norm=False), **kwargs)
     return model
@@ -15,7 +15,7 @@ class VGG_NoPooling(VGG):
         super(VGG, self).__init__()
         self.features = features
         self.classifier = nn.Sequential(
-            nn.Linear(512 * 224 * 224, 4096),
+            nn.Linear(64 * 224 * 224, 4096),
             nn.ReLU(True),
             nn.Dropout(),
             nn.Linear(4096, 4096),

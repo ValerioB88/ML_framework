@@ -16,9 +16,10 @@ from models.FCnets import FC4
 from models.ExtVGG16 import vgg16np
 from train_net import *
 import time
+import wandb
 
 class Experiment(ABC):
-    def __init__(self, name_experiment='default_name', parser=None):
+    def __init__(self, experiment_name='default_name', parser=None):
         self.use_cuda = False
         if torch.cuda.is_available():
             print('Using cuda - you are probably on the server')
@@ -27,7 +28,7 @@ class Experiment(ABC):
         PARAMS = vars(parser.parse_known_args()[0])
 
         self.current_run = -1
-        self.name_experiment = name_experiment
+        self.experiment_name = experiment_name
         self.num_runs = PARAMS['num_runs']  # this is not used here, and it shouldn't be here, but for now we are creating a neptune session when an Experiment is created, and we want to save this as a parameter, so we need to do it here.
         self.pretraining = PARAMS['pretraining']
         self.stop_when_train_acc_is = PARAMS['stop_when_train_acc_is']
@@ -41,6 +42,8 @@ class Experiment(ABC):
         self.additional_tags = PARAMS['additional_tags']
         self.size_object = PARAMS['size_object']
         self.use_neptune = PARAMS['use_neptune']
+        self.group_name = PARAMS['wandb_group_name']
+        self.project_name = PARAMS['project_name']
         self.size_object = None if self.size_object == '0' else self.size_object
         self.experiment_data = {}
         self.experiment_loaders = {}  # we separate data from loaders because loaders are pickled objects and may broke when module name changes. If this happens, at least we preserve the data. We generally don't even need the loaders much.
@@ -49,9 +52,9 @@ class Experiment(ABC):
         if self.force_cuda:
             self.use_cuda = True
 
-        list_tags = [name_experiment] if name_experiment != '' else []
+        list_tags = [experiment_name] if experiment_name != '' else []
         if self.additional_tags is not None:
-            [list_tags.append(i) for i in self.additional_tags.split('_')]
+            [list_tags.append(i) for i in self.additional_tags.split('_') if i is not 'empty_tag']
         list_tags.append('ptvanilla') if self.pretraining == 'vanilla' else None
         list_tags.append('ptImageNet') if self.pretraining == 'ImageNet' else None
         list_tags.append(self.network_name)
@@ -78,21 +81,23 @@ class Experiment(ABC):
         print('***PARAMS***')
         for i in sorted(PARAMS.keys()):
             print(f'\t{i} : {PARAMS[i]}')
-        self.initialize_neptune(PARAMS, list_tags) if self.use_neptune else None
+        self.initialize_neptune(self.project_name, self.group_name, PARAMS, list_tags) if self.use_neptune else None
         self.new_run()
 
     @staticmethod
-    def initialize_neptune(PARAMS, list_tags):
+    def initialize_neptune(project_name, group_name, PARAMS, list_tags):
         a = time.time()
-        neptune.init('valeriobiscione/valerioERC')
-        print('Neptune Initialize: {}'.format(time.time() - a))
-        a = time.time()
-        try:
-            neptune.create_experiment(name='',
-                                      params=PARAMS,
-                                      tags=list_tags)
-        except BaseException as e:
-            print(e)
+        wandb.init(name=None, project=project_name, tags=list_tags, group=group_name, config=PARAMS)
+
+        # neptune.init('valeriobiscione/valerioERC')
+        # print('Neptune Initialize: {}'.format(time.time() - a))
+        # a = time.time()
+        # try:
+        #     neptune.create_experiment(name='',
+        #                               params=PARAMS,
+        #                               tags=list_tags)
+        # except BaseException as e:
+        #     print(e)
         print('Neptune Creation: {}'.format(time.time() - a))
 
     @staticmethod
@@ -119,12 +124,12 @@ class Experiment(ABC):
                                   use_cuda=self.use_cuda,
                                   to_neptune=False, log_text=log_text,
                                   metrics_prefix='cnsl'),
-                  EarlyStopping(min_delta=0.01, patience=800, percentage=True, mode='max',
+                  EarlyStopping(min_delta=0.01, patience=500, percentage=True, mode='max',
                                 reaching_goal=self.stop_when_train_acc_is,
                                 metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
                                 check_every=nept_check_every if self.use_neptune
                                 else console_check_every),
-                  EarlyStopping(min_delta=0.01, patience=800, percentage=True, mode='min',
+                  EarlyStopping(min_delta=0.01, patience=500, percentage=True, mode='min',
                                 reaching_goal=None,
                                 metric_name='nept/mean_loss' if self.use_neptune else 'cnsl/mean_loss',
                                 check_every=nept_check_every if self.use_neptune
@@ -244,12 +249,12 @@ class TypeNet(Enum):
 
 
 class StandardTrainingExperiment(Experiment):
-    def __init__(self, name_experiment='standard_training', parser=None):
+    def __init__(self, experiment_name='', parser=None):
         parser = utils.parse_standard_training_arguments(parser)
         self.use_gap, self.feature_extraction, self.big_canvas, self.shallow_FC = False, False, False, False
         self.size_canvas = None
         self.batch_size = None
-        super().__init__(name_experiment=name_experiment, parser=parser)
+        super().__init__(experiment_name=experiment_name, parser=parser)
 
     def finalize_init(self, PARAMS, list_tags):
         self.use_gap = PARAMS['use_gap']
@@ -436,7 +441,7 @@ class StandardTrainingExperiment(Experiment):
         pretrain_path = None
         if pretraining != 'vanilla':
             if pretraining == 'ImageNet':
-                pretrain_path = glob.glob('./models/ImageNet_{}_o1000.pickle'.format(network))
+                pretrain_path = glob.glob('./models/ImageNet_{}_o1000.pth'.format(network))
                 assert len(pretrain_path) <= 1, 'Found multiple matches for the pretraining network ImageNet {}'.format(network)
                 pretrain_path = pretrain_path[0]
             else:
@@ -495,7 +500,7 @@ class FewShotLearningExp(Experiment):
                         'matching_net_plus' the decision is made by an evaluation network. It accepts 128x128px images.
                         #ToDo: with a adaptive average pool make it accept whatever size
     '''
-    def __init__(self, name_experiment):
+    def __init__(self, experiment_name):
         parser = argparse.ArgumentParser(allow_abbrev=False)
         parser = utils.parse_few_shot_learning_parameters(parser)
         self.training_folder = None
@@ -503,7 +508,7 @@ class FewShotLearningExp(Experiment):
         self.n, self.k, self.q, self.size_canvas = 0, 0, 0, 0
         self.step = None
         self.lossfn = None
-        super().__init__(name_experiment=name_experiment, parser=parser)
+        super().__init__(experiment_name=experiment_name, parser=parser)
 
     def finalize_init(self, PARAMS, list_tags):
         self.training_folder = PARAMS['folder_for_training']

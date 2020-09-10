@@ -10,7 +10,7 @@ import os
 import csv
 import io
 import neptune
-
+import wandb
 import framework_utils
 import pathlib
 import seaborn as sn
@@ -21,12 +21,14 @@ import framework_utils as utils
 import pandas as pd
 import signal, os
 
+
 class CallbackList(object):
     """Container abstracting a list of callbacks.
 
     # Arguments
         callbacks: List of `Callback` instances.
     """
+
     def __init__(self, callbacks):
         self.callbacks = [c for c in callbacks]
 
@@ -138,6 +140,7 @@ class Callback(object):
     def on_train_end(self, logs=None):
         pass
 
+
 class LearningRateScheduler(Callback):
     """Learning rate scheduler.
     # Arguments
@@ -179,11 +182,13 @@ class LearningRateScheduler(Callback):
                 print('Epoch {:5d}: setting learning rate'
                       ' of group {} to {:.4e}.'.format(epoch, i, new_lr))
 
+
 class DefaultCallback(Callback):
     """Records metrics over epochs by averaging over each batch.
 
     NB The metrics are calculated with a moving model
     """
+
     def on_epoch_begin(self, batch, logs=None):
         self.seen = 0
         self.totals = {}
@@ -210,6 +215,7 @@ class DefaultCallback(Callback):
 
 class ProgressBarLogger(Callback):
     """TQDM progress bar that displays the running average of loss and other metrics."""
+
     def __init__(self):
         super(ProgressBarLogger, self).__init__()
 
@@ -518,7 +524,6 @@ class EarlyStopping(Callback):
                 logs['stop'] = True
                 print(f'Early Stopping: {self.string}')
 
-
     def _init_is_better(self, mode, min_delta, percentage):
         if mode not in {'min', 'max'}:
             raise ValueError('mode ' + mode + ' is unknown!')
@@ -530,10 +535,10 @@ class EarlyStopping(Callback):
         else:
             if mode == 'min':
                 self.is_better = lambda a, best: a < best - (
-                            best * min_delta / 100)
+                        best * min_delta / 100)
             if mode == 'max':
                 self.is_better = lambda a, best: a > best + (
-                            best * min_delta / 100)
+                        best * min_delta / 100)
 
 
 class StopWhenMetricIs(Callback):
@@ -552,7 +557,7 @@ class SaveModel(Callback):
     def __init__(self, net, output_path, log_in_neptune=False):
         self.output_path = output_path
         self.net = net
-        self.log_in_neptune =log_in_neptune
+        self.log_in_neptune = log_in_neptune
         super().__init__()
 
     def on_train_end(self, logs=None):
@@ -611,13 +616,16 @@ class StandardMetrics(RunningMetrics):
             if self.print_it:
                 print('[iter{}] loss: {}, train_acc: {}'.format(batch_logs['tot_iter'], batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
             if self.to_neptune:
-                neptune.send_metric('{} / Mean Running Loss '.format(self.log_text), batch_logs[f'{self.metrics_prefix}/mean_loss'])
-                neptune.send_metric('{} / Mean Train Accuracy train'.format(self.log_text), batch_logs[f'{self.metrics_prefix}/mean_acc'])
+                # neptune.send_metric('{} / Mean Running Loss '.format(self.log_text), batch_logs[f'{self.metrics_prefix}/mean_loss'])
+                # neptune.send_metric('{} / Mean Train Accuracy train'.format(self.log_text), batch_logs[f'{self.metrics_prefix}/mean_acc'])
+                wandb.log({'{} / Mean Running Loss '.format(self.log_text): batch_logs[f'{self.metrics_prefix}/mean_loss'],
+                           '{} / Mean Train Accuracy train'.format(self.log_text): batch_logs[f'{self.metrics_prefix}/mean_acc']},
+                          step=batch_logs['tot_iter'])
             self.init_classic_logs()
 
 
 class TotalAccuracyMetric(Metrics):
-    def __init__(self,  use_cuda, to_neptune=True, log_text=''):
+    def __init__(self, use_cuda, to_neptune=True, log_text=''):
         super().__init__(use_cuda, log_every=None, to_neptune=to_neptune, log_text=log_text)
 
     def on_training_step_end(self, batch_index, batch_logs=None):
@@ -628,7 +636,8 @@ class TotalAccuracyMetric(Metrics):
         logs['total_accuracy'] = 100.0 * self.correct_train / self.total_samples
         print('Total Accuracy for [{}] samples, [{}]: {}%'.format(self.total_samples, self.log_text, logs['total_accuracy']))
         if self.to_neptune:
-            neptune.log_metric('{} Acc'.format(self.log_text), logs['total_accuracy'])
+            # neptune.log_metric('{} Acc'.format(self.log_text), logs['total_accuracy'])
+            wandb.log({'{} Acc'.format(self.log_text): logs['total_accuracy']})
 
 
 class ComputeConfMatrix(Callback):
@@ -658,7 +667,10 @@ class ComputeConfMatrix(Callback):
             plt.ylabel('truth')
             plt.xlabel('predicted')
             plt.title(self.neptune_text + ' last {} iters'.format(self.num_iter))
-            neptune.log_image('Confusion Matrix [{}]'.format(self.neptune_text), figure)
+            # neptune.log_image('Confusion Matrix [{}]'.format(self.neptune_text), figure)
+            wandb.log({'Confusion Matrix [{}]'.format(self.neptune_text): wandb.Image(plt)})
+            print('CONFUSION MAT PLOTTED**********')
+
             plt.close()
 
 
@@ -678,7 +690,9 @@ class RollingAccEachClassNeptune(Callback):
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
             if correct_class is not None:
                 for idx, cc in enumerate(correct_class.numpy()):
-                    neptune.send_metric(f'Training {idx} Class Acc - [{self.neptune_text}]', cc * 100 if not np.isnan(cc) else -1)
+                    # neptune.send_metric(f'Training {idx} Class Acc - [{self.neptune_text}]', cc * 100 if not np.isnan(cc) else -1)
+                    wandb.log({f'Training {idx} Class Acc - [{self.neptune_text}]': cc * 100 if not np.isnan(cc) else -1},
+                              step=logs['tot_iter'])
 
 
 class PlotTimeElapsed(Callback):
@@ -783,10 +797,13 @@ class ComputeDataframe(Callback):
             plt.title(self.log_text_plot)
             cbar = fig.colorbar(im)
             cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)
-            neptune.log_image('{} Density Plot Accuracy'.format(self.log_text_plot), fig)
+            # neptune.log_image('{} Density Plot Accuracy'.format(self.log_text_plot), fig)
+            wandb.log({'{} Density Plot Accuracy'.format(self.log_text_plot): fig})
+
             plt.close()
 
         logs['dataframe'] = data_frame
+
 
 class CompConfMatrixFewShot(ComputeConfMatrix):
     def on_training_step_end(self, batch, logs=None):
@@ -832,9 +849,8 @@ class PlotGradientNeptune(Callback):
             plt.ylabel("average gradient")
             plt.title("Gradient flow iter{}".format(logs['tot_iter']))
             plt.grid(True)
-            neptune.log_image('Gradient Plot [{}]'.format(self.log_txt), figure)
+            # neptune.log_image('Gradient Plot [{}]'.format(self.log_txt), figure)
+            wandb.log({'Gradient Plot [{}]'.format(self.log_txt): wandb.Image(plt)})
+
             self.grad = []
             plt.close()
-
-
-

@@ -12,7 +12,7 @@ from matplotlib.patches import Rectangle
 from scipy import interpolate
 
 from generate_datasets.generators.translate_generator import TranslateGenerator
-
+import wandb
 
 desired_width = 320
 np.set_printoptions(linewidth=desired_width)
@@ -47,6 +47,13 @@ def parse_experiment_arguments(parser=None):
                         default=1)
     parser.add_argument("-tags", "--additional_tags",
                         help="Add additional tags. Separate them by underscore. E.g. tag1_tag2",
+                        type=str,
+                        default=None)
+    parser.add_argument("-prjnm", "--project_name",
+                        type=str,
+                        default='RandomProject')
+    parser.add_argument("-wbg", "--wandb_group_name",
+                        help="Group name for weight and biases, to organize sub experiments of a bigger project",
                         type=str,
                         default=None)
     parser.add_argument("-so", "--size_object",
@@ -156,8 +163,13 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
         std = [0.2, 0.2, 0.2]
         Warning('MEAN, STD AND DATASET_NAME NOT SET FOR NEPTUNE LOGGING. This message is not referring to normalizing in PyTorch')
 
-    neptune.log_text('{} mean'.format(dataset_name), str(mean))
-    neptune.log_text('{} std'.format(dataset_name), str(std))
+    # neptune.log_text('{} mean'.format(dataset_name), str(mean))
+    # neptune.log_text('{} std'.format(dataset_name), str(std))
+    # wandb.log({'{} mean'.format(dataset_name): str(mean),
+    #           '{} std'.format(dataset_name) : str(std)})
+    wandb.run.summary['{} mean'.format(dataset_name)] = mean
+    wandb.run.summary['{} std'.format(dataset_name)] = std
+
     size_object = dataset.size_object if dataset.size_object is not None else (0, 0)
 
     def draw_rect(canvas, range):
@@ -179,7 +191,8 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
             else:
                 canvas = draw_rect(canvas, rangeC)
 
-            neptune.log_image('{} AREA, [{}] '.format(log_text, dataset_name, translation_type_str), canvas.astype(np.uint8))
+            wandb.log({'Debug / {} AREA, [{}] '.format(log_text, dataset_name, translation_type_str): [wandb.Image(canvas)]}, step=0)
+            # neptune.log_image('{} AREA, [{}] '.format(log_text, dataset_name, translation_type_str), canvas.astype(np.uint8))
             if break_after_one:
                 break
 
@@ -196,12 +209,19 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
             if 'image_name' in list(more.keys()):
                 add_text = more['image_name']
 
-            [neptune.log_image('{} example images: [{}]'.format(log_text, dataset_name),
-                               (convert_normalized_tensor_to_plottable_array(im, mean, std,
-                                                                                    text=f'{str(lb)}' +
-                                                                                         (f':"{nc[lb]}"' if nc[lb] != str(lb) else '') +
-                                                                                         os.path.splitext(n)[0])).astype(np.uint8))
-             for im, lb, n in zip(images, labels.numpy(), add_text)]
+            wandb.log({'Debug / {} example images: [{}]'.format(log_text, dataset_name):
+                               [wandb.Image(convert_normalized_tensor_to_plottable_array(im, mean, std,
+                                                                             text=f'{str(lb)}' +
+                                                                                  (f':"{nc[lb]}"' if nc[lb] != str(lb) else '') +
+                                                                                  os.path.splitext(n)[0]).astype(np.uint8))
+             for im, lb, n in zip(images, labels.numpy(), add_text)]}, step=0)
+
+            # [neptune.log_image('{} example images: [{}]'.format(log_text, dataset_name),
+            #                    (convert_normalized_tensor_to_plottable_array(im, mean, std,
+            #                                                                         text=f'{str(lb)}' +
+            #                                                                              (f':"{nc[lb]}"' if nc[lb] != str(lb) else '') +
+            #                                                                              os.path.splitext(n)[0])).astype(np.uint8))
+            #  for im, lb, n in zip(images, labels.numpy(), add_text)]
 
         except StopIteration:
             Warning('Iteration stopped when plotting [{}] on Neptune'.format(dataset_name))
