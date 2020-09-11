@@ -56,6 +56,10 @@ def parse_experiment_arguments(parser=None):
                         help="Group name for weight and biases, to organize sub experiments of a bigger project",
                         type=str,
                         default=None)
+    parser.add_argument("-pat1", "--patience_stagnation",
+                        help="Patience for early stopping for stagnation (num iter)",
+                        type=int,
+                        default=800)
     parser.add_argument("-so", "--size_object",
                         help="Change the size of the object. W_H (x, y). Set to 0 if you don't want to resize the object",
                         type=str,
@@ -134,7 +138,7 @@ def parse_standard_training_arguments(parser=None):
                         type=int,
                         default=0)
     parser.add_argument("-f", "--feature_extraction",
-                        help="freeze the feature layer part of the VGG net",
+                        help="freeze the feature (conv) layers part of the VGG net",
                         type=int,
                         default=0)
     parser.add_argument("-bC", "--big_canvas",
@@ -145,6 +149,18 @@ def parse_standard_training_arguments(parser=None):
                         help="batch_size",
                         type=int,
                         default=32)
+    parser.add_argument("-freeze_fc", "--freeze_fc",
+                        help="Freeze the fully connected layer",
+                        type=int,
+                        default=0)
+    parser.add_argument("-scramble_fc", "--scramble_fc",
+                        help="When using a pretrain network, do not copy the fc weights",
+                        type=int,
+                        default=0)
+    parser.add_argument("-scramble_conv", "--scramble_conv",
+                        help="When using a pretrain network, do not copy the conv weights",
+                        type=int,
+                        default=0)
 
     return parser
 
@@ -191,7 +207,7 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
             else:
                 canvas = draw_rect(canvas, rangeC)
 
-            wandb.log({'Debug / {} AREA, [{}] '.format(log_text, dataset_name, translation_type_str): [wandb.Image(canvas)]}, step=0)
+            wandb.log({f'Debug / {log_text} AREA, [{dataset_name}] ': [wandb.Image(canvas)]}, step=0)
             # neptune.log_image('{} AREA, [{}] '.format(log_text, dataset_name, translation_type_str), canvas.astype(np.uint8))
             if break_after_one:
                 break
@@ -211,10 +227,9 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
 
             wandb.log({'Debug / {} example images: [{}]'.format(log_text, dataset_name):
                                [wandb.Image(convert_normalized_tensor_to_plottable_array(im, mean, std,
-                                                                             text=f'{str(lb)}' +
-                                                                                  (f':"{nc[lb]}"' if nc[lb] != str(lb) else '') +
+                                                                             text=f'{lb}' +
                                                                                   os.path.splitext(n)[0]).astype(np.uint8))
-             for im, lb, n in zip(images, labels.numpy(), add_text)]}, step=0)
+             for im, lb, n in zip(images, labels, add_text)]}, step=0)
 
             # [neptune.log_image('{} example images: [{}]'.format(log_text, dataset_name),
             #                    (convert_normalized_tensor_to_plottable_array(im, mean, std,

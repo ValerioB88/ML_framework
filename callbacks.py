@@ -619,8 +619,8 @@ class StandardMetrics(RunningMetrics):
                 # neptune.send_metric('{} / Mean Running Loss '.format(self.log_text), batch_logs[f'{self.metrics_prefix}/mean_loss'])
                 # neptune.send_metric('{} / Mean Train Accuracy train'.format(self.log_text), batch_logs[f'{self.metrics_prefix}/mean_acc'])
                 wandb.log({'{} / Mean Running Loss '.format(self.log_text): batch_logs[f'{self.metrics_prefix}/mean_loss'],
-                           '{} / Mean Train Accuracy train'.format(self.log_text): batch_logs[f'{self.metrics_prefix}/mean_acc']},
-                          step=batch_logs['tot_iter'])
+                           '{} / Mean Train Accuracy train'.format(self.log_text): batch_logs[f'{self.metrics_prefix}/mean_acc']})
+                        #  step=batch_logs['tot_iter'])
             self.init_classic_logs()
 
 
@@ -691,8 +691,8 @@ class RollingAccEachClassNeptune(Callback):
             if correct_class is not None:
                 for idx, cc in enumerate(correct_class.numpy()):
                     # neptune.send_metric(f'Training {idx} Class Acc - [{self.neptune_text}]', cc * 100 if not np.isnan(cc) else -1)
-                    wandb.log({f'Training {idx} Class Acc - [{self.neptune_text}]': cc * 100 if not np.isnan(cc) else -1},
-                              step=logs['tot_iter'])
+                    wandb.log({f'Training {idx} Class Acc - [{self.neptune_text}]': cc * 100 if not np.isnan(cc) else -1})
+                            #  step=logs['tot_iter'])
 
 
 class PlotTimeElapsed(Callback):

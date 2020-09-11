@@ -13,7 +13,7 @@ from callbacks import *
 import framework_utils as utils
 from models.meta_learning_models import MatchingNetwork, MatchingNetPlus, RelationNetSung, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
 from models.FCnets import FC4
-from models.ExtVGG16 import vgg16np
+from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
 import time
 import wandb
@@ -44,6 +44,7 @@ class Experiment(ABC):
         self.use_neptune = PARAMS['use_neptune']
         self.group_name = PARAMS['wandb_group_name']
         self.project_name = PARAMS['project_name']
+        self.patience_stagnation = PARAMS['patience_stagnation']
         self.size_object = None if self.size_object == '0' else self.size_object
         self.experiment_data = {}
         self.experiment_loaders = {}  # we separate data from loaders because loaders are pickled objects and may broke when module name changes. If this happens, at least we preserve the data. We generally don't even need the loaders much.
@@ -54,7 +55,7 @@ class Experiment(ABC):
 
         list_tags = [experiment_name] if experiment_name != '' else []
         if self.additional_tags is not None:
-            [list_tags.append(i) for i in self.additional_tags.split('_') if i is not 'empty_tag']
+            [list_tags.append(i) for i in self.additional_tags.split('_') if i != 'emptytag']
         list_tags.append('ptvanilla') if self.pretraining == 'vanilla' else None
         list_tags.append('ptImageNet') if self.pretraining == 'ImageNet' else None
         list_tags.append(self.network_name)
@@ -124,12 +125,12 @@ class Experiment(ABC):
                                   use_cuda=self.use_cuda,
                                   to_neptune=False, log_text=log_text,
                                   metrics_prefix='cnsl'),
-                  EarlyStopping(min_delta=0.01, patience=500, percentage=True, mode='max',
+                  EarlyStopping(min_delta=0.01, patience=800, percentage=True, mode='max',
                                 reaching_goal=self.stop_when_train_acc_is,
                                 metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
                                 check_every=nept_check_every if self.use_neptune
-                                else console_check_every),
-                  EarlyStopping(min_delta=0.01, patience=500, percentage=True, mode='min',
+                                else console_check_every), # once reached a certain accuracy
+                  EarlyStopping(min_delta=0.01, patience=self.patience_stagnation, percentage=True, mode='min',
                                 reaching_goal=None,
                                 metric_name='nept/mean_loss' if self.use_neptune else 'cnsl/mean_loss',
                                 check_every=nept_check_every if self.use_neptune
@@ -245,7 +246,8 @@ class TypeNet(Enum):
     VGG = 0
     FC = 1
     RESNET = 2
-    OTHER = 3
+    SMALL_CNN = 3
+    OTHER = 4
 
 
 class StandardTrainingExperiment(Experiment):
@@ -254,6 +256,9 @@ class StandardTrainingExperiment(Experiment):
         self.use_gap, self.feature_extraction, self.big_canvas, self.shallow_FC = False, False, False, False
         self.size_canvas = None
         self.batch_size = None
+        self.scramble_fc = None
+        self.scramble_conv = None
+        self.freeze_fc = None
         super().__init__(experiment_name=experiment_name, parser=parser)
 
     def finalize_init(self, PARAMS, list_tags):
@@ -263,6 +268,9 @@ class StandardTrainingExperiment(Experiment):
         self.shallow_FC = PARAMS['shallow_FC']
         self.size_canvas = (224, 224) if not self.big_canvas else (400, 400)
         self.batch_size = PARAMS['batch_size']
+        self.freeze_fc = PARAMS['freeze_fc']
+        self.scramble_fc = PARAMS['scramble_fc']
+        self.scramble_conv = PARAMS['scramble_conv']
         if not self.use_cuda:
             print(f'Not using cuda. Batch size changed from {self.batch_size} to 4')
             self.batch_size = 4
@@ -295,7 +303,10 @@ class StandardTrainingExperiment(Experiment):
                                                      feature_extraction=self.feature_extraction,
                                                      pretraining=pretraining,
                                                      big_canvas=self.big_canvas,
-                                                     shallow_FC=self.shallow_FC)
+                                                     shallow_FC=self.shallow_FC,
+                                                     freeze_fc=self.freeze_fc,
+                                                     scramble_fc=self.scramble_fc,
+                                                     scramble_conv=self.scramble_conv)
         return net, params_to_update
 
     @staticmethod
@@ -308,8 +319,10 @@ class StandardTrainingExperiment(Experiment):
             network = torchvision.models.vgg16_bn(pretrained=False, progress=True, num_classes=num_classes)
         elif network == 'vgg16':
             network = torchvision.models.vgg16(pretrained=False, progress=True, num_classes=num_classes)
-        elif network == 'vgg16np':
-            network = vgg16np()
+        elif network == 'smallCNNnopool':
+            network = smallCNNnp()
+        elif network == 'smallCNNpool':
+            network = smallCNNp()
         elif network == 'resnet18':
             network = torchvision.models.resnet18(pretrained=False, progress=True, num_classes=num_classes)
         elif network == 'FC4':  # 2500, 2000, 1500, 1000, 500, 10
@@ -325,18 +338,22 @@ class StandardTrainingExperiment(Experiment):
         find_gap = 'gap1' in pretrain_path
         find_sFC = 'sFC1' in pretrain_path
         find_bC = 'bC1' in pretrain_path
-        isnp = re.findall(r'vgg[0-9]+np', pretrain_path)
+        isnp = re.findall(r'nopool', pretrain_path)
         find_NP = bool(isnp[0]) if isnp else False
 
         # Grayscale not implemented: grayscale is assumed to be FALSE at all time
+        if type_net == TypeNet.SMALL_CNN:
+            if find_NP:
+                if find_sFC:
+                    print('**Pretraining model has a shallow FC!')
+                    network.classifier = torch.nn.Linear(16 * 224 * 224, num_classes)
+            else:
+                network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, find_ouptut)
+            # ToDo: no found NP option for small network
         if type_net == TypeNet.VGG:
             if find_sFC:
-                if find_NP:
-                    print('**Pretraing model has a shallow FC!')
-                    network.classifier = torch.nn.Linear(512 * 224 * 224, num_classes)
-                else:
-                    print('**Pretraing model has a shallow FC!')
-                    network.classifier = torch.nn.Linear(512 * 7 * 7, num_classes)
+                print('**Pretraing model has a shallow FC!')
+                network.classifier = torch.nn.Linear(512 * 7 * 7, num_classes)
             else:
                 network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, find_ouptut)
             if find_gap:
@@ -397,19 +414,27 @@ class StandardTrainingExperiment(Experiment):
         return network
 
     @staticmethod
+    def freeze_fully_connected(network):
+        for param in network.classifier.parameters():
+            param.requires_grad = False
+        params_to_update = []
+        for param in network.parameters():
+            if param.requires_grad == True:
+                params_to_update.append(param)
+        return params_to_update
+
+    @staticmethod
     def feature_extraction_method(network, feature_extraction):
-        params_to_update = network.parameters()
-        if feature_extraction:
-            for param in network.features.parameters():
-                param.requires_grad = False
-            params_to_update = []
-            for param in network.parameters():
-                if param.requires_grad == True:
-                    params_to_update.append(param)
+        for param in network.features.parameters():
+            param.requires_grad = False
+        params_to_update = []
+        for param in network.parameters():
+            if param.requires_grad == True:
+                params_to_update.append(param)
         return params_to_update
 
     @classmethod
-    def prepare_network(cls, network, num_classes, is_server=False, grayscale=False, use_gap=False, feature_extraction=False, pretraining='vanilla', big_canvas=False, shallow_FC=False, verbose=True):
+    def prepare_network(cls, network, num_classes, is_server=False, grayscale=False, use_gap=False, feature_extraction=False, pretraining='vanilla', big_canvas=False, shallow_FC=False, verbose=True, freeze_fc=False, scramble_fc=False, scramble_conv=False):
         """
         @param network: this can be a string such as 'vgg16' or a torch.nn.Module
         @param pretraining: can be [vanilla], [ImageNet] or the path
@@ -423,6 +448,8 @@ class StandardTrainingExperiment(Experiment):
                 type_net = TypeNet.FC
             elif 'resnet' in network:
                 type_net = TypeNet.RESNET
+            elif 'smallCNN' in network:
+                type_net = TypeNet.SMALL_CNN
         else:
             type_net = TypeNet.OTHER
 
@@ -454,13 +481,38 @@ class StandardTrainingExperiment(Experiment):
             network = cls.prepare_load(network, num_classes, pretrain_path, type_net)
             if verbose:
                 print('Loaded model: {}'.format(pretrain_path))
-            network.load_state_dict(torch.load(pretrain_path, map_location=torch.device('cuda' if is_server else 'cpu')))
+            loaded_state_dict = torch.load(pretrain_path, map_location=torch.device('cuda' if is_server else 'cpu'))
+            print('**Loading these parameters from pretrained network:') if verbose else None
+            if scramble_fc:
+                own_state = network.state_dict()
+                if type_net == TypeNet.VGG:
+                    for name, param in loaded_state_dict.items():
+                        if 'classifier' not in name:
+                            print(name) if verbose else None
+                            own_state[name].copy_(param)
+                    print('Scramble FC is ON: Fully Connected layer NOT copied when loading pretraining params') if verbose else None
 
+                else:
+                    assert False, f"Scramble_fc not implemented for [{type_net}]"
+            elif scramble_conv:
+                own_state = network.state_dict()
+                if type_net == TypeNet.VGG:
+                    for name, param in loaded_state_dict.items():
+                        if 'features' not in name:
+                            print(name) if verbose else None
+                            own_state[name].copy_(param)
+                    print('Scramble conv is ON: Conv. layer NOT copied when loading pretraining params') if verbose else None
+                else:
+                    assert False, f"Scramble_fc not implemented for [{type_net}]"
+            else:
+                print('ALL PARAMETERS') if verbose else None
+                network.load_state_dict(loaded_state_dict)
+        print('***')
         if type_net == TypeNet.VGG:
             cls.vgg_model_surgery(network, grayscale, num_classes, shallow_FC, use_gap, big_canvas)
             network.train_step = standard_net_step
 
-        if type_net == TypeNet.FC:
+        if type_net == TypeNet.FC or type_net == TypeNet.SMALL_CNN:
             if network.classifier[-1].out_features != num_classes:
                 network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, num_classes)
                 network.train_step = standard_net_step
@@ -470,8 +522,14 @@ class StandardTrainingExperiment(Experiment):
                 network.fc = torch.nn.Linear(network.fc.in_features, num_classes)
                 network.train_step = standard_net_step
 
-        if type_net == TypeNet.VGG or type_net == TypeNet.FC or type_net == TypeNet.RESNET:
+        if feature_extraction and freeze_fc:
+            assert False, 'Both feature extraction and freeze_fc are on - the network won''t learn anything!'
+        if feature_extraction and (type_net == TypeNet.VGG or type_net == TypeNet.FC or type_net == TypeNet.RESNET or type_net == TypeNet.SMALL_CNN):
             params_to_update = cls.feature_extraction_method(network, feature_extraction)
+        elif freeze_fc and type_net == TypeNet.VGG:
+            params_to_update = cls.freeze_fully_connected(network)
+        else:
+            params_to_update = network.parameters()
 
         for m in network.modules():
             if isinstance(m, torch.nn.BatchNorm2d):
