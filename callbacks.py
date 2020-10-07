@@ -603,8 +603,8 @@ class RunningMetrics(Metrics):
 
 
 class StandardMetrics(RunningMetrics):
-    def __init__(self, log_every=5, print_it=True, use_cuda=True, to_neptune=True, log_text='', metrics_prefix=''):
-        super().__init__(use_cuda, log_every, to_neptune, log_text)
+    def __init__(self, log_every=5, print_it=True, use_cuda=True, to_weblog=True, log_text='', metrics_prefix=''):
+        super().__init__(use_cuda, log_every, to_weblog, log_text)
         self.print_it = print_it
         self.metrics_prefix = metrics_prefix
 
@@ -625,8 +625,8 @@ class StandardMetrics(RunningMetrics):
 
 
 class TotalAccuracyMetric(Metrics):
-    def __init__(self, use_cuda, to_neptune=True, log_text=''):
-        super().__init__(use_cuda, log_every=None, to_neptune=to_neptune, log_text=log_text)
+    def __init__(self, use_cuda, to_weblog=True, log_text=''):
+        super().__init__(use_cuda, log_every=None, to_neptune=to_weblog, log_text=log_text)
 
     def on_training_step_end(self, batch_index, batch_logs=None):
         super().on_training_step_end(batch_index, batch_logs)
@@ -641,11 +641,11 @@ class TotalAccuracyMetric(Metrics):
 
 
 class ComputeConfMatrix(Callback):
-    def __init__(self, num_classes, reset_every=None, send_to_neptune=True, neptune_text=''):
+    def __init__(self, num_classes, reset_every=None, send_to_weblog=True, weblog_text=''):
         self.num_classes = num_classes
         self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
-        self.send_to_neptune = send_to_neptune
-        self.neptune_text = neptune_text
+        self.send_to_neptune = send_to_weblog
+        self.neptune_text = weblog_text
         self.reset_every = reset_every
         self.num_iter = 0
         super().__init__()
@@ -674,11 +674,11 @@ class ComputeConfMatrix(Callback):
             plt.close()
 
 
-class RollingAccEachClassNeptune(Callback):
-    def __init__(self, log_every, num_classes, neptune_text=''):
+class RollingAccEachClassWeblog(Callback):
+    def __init__(self, log_every, num_classes, weblog_text=''):
         self.log_every = log_every
         self.confusion_matrix = torch.zeros(num_classes, num_classes)
-        self.neptune_text = neptune_text
+        self.neptune_text = weblog_text
         self.num_classes = num_classes
         super().__init__()
 
@@ -727,7 +727,7 @@ class ComputeDataframe(Callback):
                                           cat_to_save]))]
         return array
 
-    def __init__(self, num_classes, use_cuda, translation_type_str, network_name, size_canvas, log_density_neptune=True, log_text_plot='', output_and_softmax=True):
+    def __init__(self, num_classes, use_cuda, translation_type_str, network_name, size_canvas, log_density_weblog=True, log_text_plot='', output_and_softmax=True):
         super().__init__()
         self.output_and_softmax = output_and_softmax
         self.size_canvas = size_canvas
@@ -735,11 +735,11 @@ class ComputeDataframe(Callback):
         self.translation_type_str = translation_type_str
         self.network_name = network_name
 
-        self.index_dataframe = ['net', 'class_name', 'transl_X', 'transl_Y', 'tested_area', 'is_correct', 'class_output']
+        self.index_dataframe = ['net', 'class_name', 'transl_X', 'transl_Y', 'size_X', 'size_Y', 'tested_area', 'is_correct', 'class_output']
         self.column_names = self.build_columns(['class {}'.format(i) for i in range(self.num_classes)])
         self.rows_frames = []
         self.use_cuda = use_cuda
-        self.plot_density_on_neptune = log_density_neptune
+        self.plot_density_on_neptune = log_density_weblog
         self.log_text_plot = log_text_plot
 
     def on_training_step_end(self, batch, logs=None):
@@ -747,12 +747,14 @@ class ComputeDataframe(Callback):
         labels_batch_t = logs['y_true']
         predicted_batch_t = logs['y_pred']
         face_center_batch_t = logs['more']['center']
+        size_object_batch_t = logs['more']['size']
 
         correct_batch_t = (utils.make_cuda(predicted_batch_t, self.use_cuda) == utils.make_cuda(labels_batch_t, self.use_cuda))
         labels = labels_batch_t.tolist()
         predicted_batch = predicted_batch_t.tolist()
         correct_batch = correct_batch_t.tolist()
         face_center_batch = np.array([np.array(i) for i in face_center_batch_t]).transpose()
+        size_object_batch = np.array([np.array(i) for i in size_object_batch_t]).transpose()
 
         if self.output_and_softmax:
             softmax_batch_t = torch.softmax(utils.make_cuda(output_batch_t, self.use_cuda), 1)
@@ -764,6 +766,7 @@ class ComputeDataframe(Callback):
             label = labels[c]
             predicted = predicted_batch[c]
             face_center = face_center_batch[c]
+            size_object = size_object_batch[c]
 
             if self.output_and_softmax:
                 softmax_all_cat = softmax_batch[c]
@@ -778,9 +781,9 @@ class ComputeDataframe(Callback):
                 assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
                 assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
 
-                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1], self.translation_type_str, correct, predicted, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
+                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1],  size_object[0], size_object[1], self.translation_type_str, correct, predicted, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
             else:
-                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1], self.translation_type_str, correct, predicted])
+                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1], size_object[0], size_object[1], self.translation_type_str, correct, predicted])
 
     def on_train_end(self, logs=None):
         data_frame = pd.DataFrame(self.rows_frames)
@@ -792,15 +795,23 @@ class ComputeDataframe(Callback):
         data_frame.reset_index(level='is_correct', inplace=True)
 
         if self.plot_density_on_neptune:
-            mean_accuracy = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
-            ax, fig, im = framework_utils.imshow_density(mean_accuracy, plot_args={'interpolate': True, 'size_canvas': self.size_canvas}, vmin=1 / self.num_classes - 1 / self.num_classes * 0.2, vmax=1)
+            mean_accuracy_translation = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
+            ax, fig, im = framework_utils.imshow_density(mean_accuracy_translation, plot_args={'interpolate': True, 'size_canvas': self.size_canvas}, vmin=1 / self.num_classes - 1 / self.num_classes * 0.2, vmax=1)
             plt.title(self.log_text_plot)
             cbar = fig.colorbar(im)
             cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)
             # neptune.log_image('{} Density Plot Accuracy'.format(self.log_text_plot), fig)
             wandb.log({'{} Density Plot Accuracy'.format(self.log_text_plot): fig})
-
             plt.close()
+            mean_accuracy_size_X = data_frame.groupby(['size_X']).mean()['is_correct']  # generally size_X = size_Y so for now we don't bother with both
+            x = mean_accuracy_size_X.index.get_level_values('size_X')
+            plt.plot(x, mean_accuracy_size_X)
+            plt.xlabel('Size item (horizontal)')
+            plt.ylabel('Mean Accuracy (%)')
+            plt.title('size-accuracy')
+            wandb.log({'{} Size Accuracy'.format(self.log_text_plot): plt})
+            plt.close()
+
 
         logs['dataframe'] = data_frame
 
@@ -815,7 +826,7 @@ class CompConfMatrixFewShot(ComputeConfMatrix):
         self.num_iter += 1
 
 
-class PlotGradientNeptune(Callback):
+class PlotGradientWeblog(Callback):
     grad = []
     layers = []
 

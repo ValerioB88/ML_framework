@@ -17,9 +17,10 @@ from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
 import time
 import wandb
+# from wandb import magic
 
 class Experiment(ABC):
-    def __init__(self, experiment_name='default_name', parser=None):
+    def __init__(self, experiment_class_name='default_name', parser=None):
         self.use_cuda = False
         if torch.cuda.is_available():
             print('Using cuda - you are probably on the server')
@@ -28,8 +29,8 @@ class Experiment(ABC):
         PARAMS = vars(parser.parse_known_args()[0])
 
         self.current_run = -1
-        self.experiment_name = experiment_name
-        self.num_runs = PARAMS['num_runs']  # this is not used here, and it shouldn't be here, but for now we are creating a neptune session when an Experiment is created, and we want to save this as a parameter, so we need to do it here.
+        # self.experiment_name = experiment_name
+        self.num_runs = PARAMS['num_runs']  # this is not used here, and it shouldn't be here, but for now we are creating a weblogger session when an Experiment is created, and we want to save this as a parameter, so we need to do it here.
         self.pretraining = PARAMS['pretraining']
         self.stop_when_train_acc_is = PARAMS['stop_when_train_acc_is']
         self.max_iterations = PARAMS['max_iterations']
@@ -41,10 +42,11 @@ class Experiment(ABC):
         self.force_cuda = PARAMS['force_cuda']
         self.additional_tags = PARAMS['additional_tags']
         self.size_object = PARAMS['size_object']
-        self.use_neptune = PARAMS['use_neptune']
+        self.use_weblog = PARAMS['use_weblog']
         self.group_name = PARAMS['wandb_group_name']
         self.project_name = PARAMS['project_name']
         self.patience_stagnation = PARAMS['patience_stagnation']
+        self.experiment_name = PARAMS['experiment_name']
         self.size_object = None if self.size_object == '0' else self.size_object
         self.experiment_data = {}
         self.experiment_loaders = {}  # we separate data from loaders because loaders are pickled objects and may broke when module name changes. If this happens, at least we preserve the data. We generally don't even need the loaders much.
@@ -53,7 +55,8 @@ class Experiment(ABC):
         if self.force_cuda:
             self.use_cuda = True
 
-        list_tags = [experiment_name] if experiment_name != '' else []
+        # list_tags = [experiment_name] if experiment_name != '' else []
+        list_tags = []
         if self.additional_tags is not None:
             [list_tags.append(i) for i in self.additional_tags.split('_') if i != 'emptytag']
         list_tags.append('ptvanilla') if self.pretraining == 'vanilla' else None
@@ -82,32 +85,22 @@ class Experiment(ABC):
         print('***PARAMS***')
         for i in sorted(PARAMS.keys()):
             print(f'\t{i} : {PARAMS[i]}')
-        self.initialize_neptune(self.project_name, self.group_name, PARAMS, list_tags) if self.use_neptune else None
+        self.initialize_weblogger(self.experiment_name, self.project_name, self.group_name, PARAMS, list_tags) if self.use_weblog else None
         self.new_run()
 
     @staticmethod
-    def initialize_neptune(project_name, group_name, PARAMS, list_tags):
+    def initialize_weblogger(experiment_name, project_name, group_name, PARAMS, list_tags):
         a = time.time()
-        wandb.init(name=None, project=project_name, tags=list_tags, group=group_name, config=PARAMS)
-
-        # neptune.init('valeriobiscione/valerioERC')
-        # print('Neptune Initialize: {}'.format(time.time() - a))
-        # a = time.time()
-        # try:
-        #     neptune.create_experiment(name='',
-        #                               params=PARAMS,
-        #                               tags=list_tags)
-        # except BaseException as e:
-        #     print(e)
-        print('Neptune Creation: {}'.format(time.time() - a))
+        wandb.init(name=experiment_name, project=project_name, tags=list_tags, group=group_name, config=PARAMS)
+        print('Weblogger Creation: {}'.format(time.time() - a))
 
     @staticmethod
-    def neptune_plot_generators_info(train_loader=None, test_loaders_list=None):
+    def weblogging_plot_generators_info(train_loader=None, test_loaders_list=None):
         if train_loader is not None:
-            utils.neptune_log_dataset_info(train_loader, log_text=train_loader.dataset.name_generator)
+            utils.weblog_dataset_info(train_loader, log_text=train_loader.dataset.name_generator)
         if test_loaders_list is not None:
             for loader in test_loaders_list:
-                utils.neptune_log_dataset_info(loader, log_text=loader.dataset.name_generator)
+                utils.weblog_dataset_info(loader, log_text=loader.dataset.name_generator)
 
 
     @abstractmethod
@@ -123,39 +116,39 @@ class Experiment(ABC):
         console_check_every = 100
         all_cb = [StandardMetrics(log_every=console_check_every, print_it=True,
                                   use_cuda=self.use_cuda,
-                                  to_neptune=False, log_text=log_text,
+                                  to_weblog=False, log_text=log_text,
                                   metrics_prefix='cnsl'),
                   EarlyStopping(min_delta=0.01, patience=800, percentage=True, mode='max',
                                 reaching_goal=self.stop_when_train_acc_is,
-                                metric_name='nept/mean_acc' if self.use_neptune else 'cnsl/mean_acc',
-                                check_every=nept_check_every if self.use_neptune
+                                metric_name='nept/mean_acc' if self.use_weblog else 'cnsl/mean_acc',
+                                check_every=nept_check_every if self.use_weblog
                                 else console_check_every), # once reached a certain accuracy
                   EarlyStopping(min_delta=0.01, patience=self.patience_stagnation, percentage=True, mode='min',
                                 reaching_goal=None,
-                                metric_name='nept/mean_loss' if self.use_neptune else 'cnsl/mean_loss',
-                                check_every=nept_check_every if self.use_neptune
+                                metric_name='nept/mean_loss' if self.use_weblog else 'cnsl/mean_loss',
+                                check_every=nept_check_every if self.use_weblog
                                 else console_check_every),  # for stagnation
                   StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_neptune=self.use_neptune, log_text=log_text),
+                                      to_weblog=self.use_weblog, log_text=log_text),
                   ComputeConfMatrix(num_classes=num_classes,
-                                    send_to_neptune=self.use_neptune,
-                                    neptune_text=log_text,
+                                    send_to_weblog=self.use_weblog,
+                                    weblog_text=log_text,
                                     reset_every=200),
 
                   StopFromUserInput(),
                   PlotTimeElapsed(time_every=100)]
 
-        all_cb += ([SaveModel(net, self.model_output_filename, self.use_neptune)] if self.model_output_filename is not None else [])
-        if self.use_neptune:
+        all_cb += ([SaveModel(net, self.model_output_filename, self.use_weblog)] if self.model_output_filename is not None else [])
+        if self.use_weblog:
             all_cb += [StandardMetrics(log_every=nept_check_every, print_it=False,
                                        use_cuda=self.use_cuda,
-                                       to_neptune=True, log_text=log_text,
+                                       to_weblog=True, log_text=log_text,
                                        metrics_prefix='nept'),
-                       RollingAccEachClassNeptune(log_every=nept_check_every,
-                                                  num_classes=num_classes,
-                                                  neptune_text=log_text),
-                       PlotGradientNeptune(net=net, log_every=50, plot_every=500, log_txt=log_text),
+                       RollingAccEachClassWeblog(log_every=nept_check_every,
+                                                 num_classes=num_classes,
+                                                 weblog_text=log_text),
+                       PlotGradientWeblog(net=net, log_every=50, plot_every=500, log_txt=log_text),
                        ]
 
         return all_cb
@@ -184,17 +177,17 @@ class Experiment(ABC):
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
         all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_neptune=self.use_neptune, log_text=log_text),
+                                      to_weblog=self.use_weblog, log_text=log_text),
                   ComputeConfMatrix(num_classes=num_classes,
-                                    send_to_neptune=self.use_neptune,
-                                    neptune_text=log_text),
+                                    send_to_weblog=self.use_weblog,
+                                    weblog_text=log_text),
                   ]
         size_canvas = self.size_canvas if hasattr(self, 'size_canvas') else (224, 224)
         all_cb += ([ComputeDataframe(num_classes,
                                      self.use_cuda,
                                      translation_type_str,
                                      self.network_name, size_canvas,
-                                     log_density_neptune=True if self.use_neptune else False, log_text_plot=log_text)]
+                                     log_density_weblog=True if self.use_weblog else False, log_text_plot=log_text)]
                    if save_dataframe else [])
         return all_cb
 
@@ -251,7 +244,7 @@ class TypeNet(Enum):
 
 
 class StandardTrainingExperiment(Experiment):
-    def __init__(self, experiment_name='', parser=None):
+    def __init__(self, experiment_class_name='', parser=None):
         parser = utils.parse_standard_training_arguments(parser)
         self.use_gap, self.feature_extraction, self.big_canvas, self.shallow_FC = False, False, False, False
         self.size_canvas = None
@@ -259,7 +252,7 @@ class StandardTrainingExperiment(Experiment):
         self.scramble_fc = None
         self.scramble_conv = None
         self.freeze_fc = None
-        super().__init__(experiment_name=experiment_name, parser=parser)
+        super().__init__(experiment_class_name=experiment_class_name, parser=parser)
 
     def finalize_init(self, PARAMS, list_tags):
         self.use_gap = PARAMS['use_gap']
@@ -558,7 +551,7 @@ class FewShotLearningExp(Experiment):
                         'matching_net_plus' the decision is made by an evaluation network. It accepts 128x128px images.
                         #ToDo: with a adaptive average pool make it accept whatever size
     '''
-    def __init__(self, experiment_name):
+    def __init__(self, experiment_class_name):
         parser = argparse.ArgumentParser(allow_abbrev=False)
         parser = utils.parse_few_shot_learning_parameters(parser)
         self.training_folder = None
@@ -566,7 +559,7 @@ class FewShotLearningExp(Experiment):
         self.n, self.k, self.q, self.size_canvas = 0, 0, 0, 0
         self.step = None
         self.lossfn = None
-        super().__init__(experiment_name=experiment_name, parser=parser)
+        super().__init__(experiment_class_name=experiment_class_name, parser=parser)
 
     def finalize_init(self, PARAMS, list_tags):
         self.training_folder = PARAMS['folder_for_training']
@@ -635,8 +628,8 @@ class FewShotLearningExp(Experiment):
         idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
         assert len(idx_ccm) == 1
         all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=num_classes,
-                                                   send_to_neptune=self.use_neptune,
-                                                   neptune_text=log_text,
+                                                   send_to_weblog=self.use_weblog,
+                                                   weblog_text=log_text,
                                                    reset_every=200)
         return all_cb
 
@@ -646,18 +639,18 @@ class FewShotLearningExp(Experiment):
             idx_cd = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeDataframe)]
             assert len(idx_cd) <= 1
             all_cb[idx_cd[0]] = ComputeDataframe(self.k,
-                                                self.use_cuda,
-                                                translation_type_str,
-                                                self.network_name, self.size_canvas,
-                                                log_density_neptune=True if self.use_neptune else False,
-                                                log_text_plot=log_text,
-                                                output_and_softmax=False)
+                                                 self.use_cuda,
+                                                 translation_type_str,
+                                                 self.network_name, self.size_canvas,
+                                                 log_density_weblog=True if self.use_weblog else False,
+                                                 log_text_plot=log_text,
+                                                 output_and_softmax=False)
 
         idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
         assert len(idx_ccm) == 1
         all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=num_classes,
-                                                   send_to_neptune=self.use_neptune,
-                                                   neptune_text=log_text,
+                                                   send_to_weblog=self.use_weblog,
+                                                   weblog_text=log_text,
                                                    reset_every=None)
 
         return all_cb

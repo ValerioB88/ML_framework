@@ -32,7 +32,10 @@ def remap_value(x, range_source, range_target):
 def parse_experiment_arguments(parser=None):
     if parser is None:
         parser = argparse.ArgumentParser(allow_abbrev=False)
-
+    parser.add_argument("-expname", "--experiment_name",
+                        help="Name of the experiment session, used as a name in the weblogger",
+                        type=str,
+                        default=None)
     parser.add_argument("-r", "--num_runs",
                         help="run experiment n times",
                         type=int,
@@ -41,8 +44,8 @@ def parse_experiment_arguments(parser=None):
                         help="Force to run it with cuda enabled (for testing)",
                         type=int,
                         default=0)
-    parser.add_argument("-neptune", "--use_neptune",
-                        help="Log stuff to neptune",
+    parser.add_argument("-weblog", "--use_weblog",
+                        help="Log stuff to the weblogger (wandb, neptune, etc.)",
                         type=int,
                         default=1)
     parser.add_argument("-tags", "--additional_tags",
@@ -164,7 +167,7 @@ def parse_standard_training_arguments(parser=None):
 
     return parser
 
-def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
+def weblog_dataset_info(dataloader, log_text='', dataset_name=None):
     compute_my_generator_info = False
     if isinstance(dataloader.dataset, TranslateGenerator):
         dataset = dataloader.dataset
@@ -206,8 +209,8 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
                     canvas = draw_rect(canvas, r)
             else:
                 canvas = draw_rect(canvas, rangeC)
+            wandb.log({f'Debug/{log_text} AREA [{dataset_name}] ': [wandb.Image(canvas)]}, step=0)
 
-            wandb.log({f'Debug / {log_text} AREA, [{dataset_name}] ': [wandb.Image(canvas)]}, step=0)
             # neptune.log_image('{} AREA, [{}] '.format(log_text, dataset_name, translation_type_str), canvas.astype(np.uint8))
             if break_after_one:
                 break
@@ -225,7 +228,7 @@ def neptune_log_dataset_info(dataloader, log_text='', dataset_name=None):
             if 'image_name' in list(more.keys()):
                 add_text = more['image_name']
 
-            wandb.log({'Debug / {} example images: [{}]'.format(log_text, dataset_name):
+            wandb.log({'Debug/{} example images: [{}]'.format(log_text, dataset_name):
                                [wandb.Image(convert_normalized_tensor_to_plottable_array(im, mean, std,
                                                                              text=f'{lb}' +
                                                                                   os.path.splitext(n)[0]).astype(np.uint8))
