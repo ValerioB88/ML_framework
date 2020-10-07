@@ -735,7 +735,7 @@ class ComputeDataframe(Callback):
         self.translation_type_str = translation_type_str
         self.network_name = network_name
 
-        self.index_dataframe = ['net', 'class_name', 'transl_X', 'transl_Y', 'size_X', 'size_Y', 'tested_area', 'is_correct', 'class_output']
+        self.index_dataframe = ['net', 'class_name', 'transl_X', 'transl_Y', 'size_X', 'size_Y', 'rotation', 'tested_area', 'is_correct', 'class_output']
         self.column_names = self.build_columns(['class {}'.format(i) for i in range(self.num_classes)])
         self.rows_frames = []
         self.use_cuda = use_cuda
@@ -748,6 +748,7 @@ class ComputeDataframe(Callback):
         predicted_batch_t = logs['y_pred']
         face_center_batch_t = logs['more']['center']
         size_object_batch_t = logs['more']['size']
+        rotation_batch_t = logs['more']['rotation']
 
         correct_batch_t = (utils.make_cuda(predicted_batch_t, self.use_cuda) == utils.make_cuda(labels_batch_t, self.use_cuda))
         labels = labels_batch_t.tolist()
@@ -755,6 +756,7 @@ class ComputeDataframe(Callback):
         correct_batch = correct_batch_t.tolist()
         face_center_batch = np.array([np.array(i) for i in face_center_batch_t]).transpose()
         size_object_batch = np.array([np.array(i) for i in size_object_batch_t]).transpose()
+        rotation_batch = np.array([np.array(i) for i in rotation_batch_t]).transpose()
 
         if self.output_and_softmax:
             softmax_batch_t = torch.softmax(utils.make_cuda(output_batch_t, self.use_cuda), 1)
@@ -767,6 +769,7 @@ class ComputeDataframe(Callback):
             predicted = predicted_batch[c]
             face_center = face_center_batch[c]
             size_object = size_object_batch[c]
+            rotation_object = rotation_batch[c]
 
             if self.output_and_softmax:
                 softmax_all_cat = softmax_batch[c]
@@ -781,9 +784,9 @@ class ComputeDataframe(Callback):
                 assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
                 assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
 
-                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1],  size_object[0], size_object[1], self.translation_type_str, correct, predicted, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
+                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1],  size_object[0], size_object[1], rotation_object, self.translation_type_str, correct, predicted, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
             else:
-                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1], size_object[0], size_object[1], self.translation_type_str, correct, predicted])
+                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1], size_object[0], size_object[1], rotation_object, self.translation_type_str, correct, predicted])
 
     def on_train_end(self, logs=None):
         data_frame = pd.DataFrame(self.rows_frames)
@@ -795,6 +798,7 @@ class ComputeDataframe(Callback):
         data_frame.reset_index(level='is_correct', inplace=True)
 
         if self.plot_density_on_neptune:
+            # Plot Density Translation
             mean_accuracy_translation = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
             ax, fig, im = framework_utils.imshow_density(mean_accuracy_translation, plot_args={'interpolate': True, 'size_canvas': self.size_canvas}, vmin=1 / self.num_classes - 1 / self.num_classes * 0.2, vmax=1)
             plt.title(self.log_text_plot)
@@ -803,15 +807,28 @@ class ComputeDataframe(Callback):
             # neptune.log_image('{} Density Plot Accuracy'.format(self.log_text_plot), fig)
             wandb.log({'{} Density Plot Accuracy'.format(self.log_text_plot): fig})
             plt.close()
+
+            # Plot Scale Accuracy
             mean_accuracy_size_X = data_frame.groupby(['size_X']).mean()['is_correct']  # generally size_X = size_Y so for now we don't bother with both
             x = mean_accuracy_size_X.index.get_level_values('size_X')
-            plt.plot(x, mean_accuracy_size_X)
+            plt.plot(x, mean_accuracy_size_X * 100)
             plt.xlabel('Size item (horizontal)')
             plt.ylabel('Mean Accuracy (%)')
             plt.title('size-accuracy')
+            print(f'Mean Accuracy Size: {mean_accuracy_size_X} for sizes: {x}')
             wandb.log({'{} Size Accuracy'.format(self.log_text_plot): plt})
             plt.close()
 
+            # Plot Rotation Accuracy
+            mean_accuracy_rotation = data_frame.groupby(['rotation']).mean()['is_correct']  # generally size_X = size_Y so for now we don't bother with both
+            x = mean_accuracy_rotation.index.get_level_values('rotation')
+            plt.plot(x, mean_accuracy_rotation * 100)
+            plt.xlabel('Rotation item (degree)')
+            plt.ylabel('Mean Accuracy (%)')
+            plt.title('rotation-accuracy')
+            print(f'Mean Accuracy Rotation: {mean_accuracy_rotation} for rotation: {x}')
+            wandb.log({'{} Rotation Accuracy'.format(self.log_text_plot): plt})
+            plt.close()
 
         logs['dataframe'] = data_frame
 
@@ -825,6 +842,7 @@ class CompConfMatrixFewShot(ComputeConfMatrix):
             self.confusion_matrix[t.long(), p.long()] += 1
         self.num_iter += 1
 
+# class ComputeCosineSimilarity
 
 class PlotGradientWeblog(Callback):
     grad = []
@@ -865,3 +883,23 @@ class PlotGradientWeblog(Callback):
 
             self.grad = []
             plt.close()
+
+
+from cossim import CosSimTranslation
+class ComputeCosineSimilarity(Callback):
+    def __init__(self, net, dataset, type_cossim='translation'):
+        # ToDo: for now always compute at the end but we can compute it at anytime changing detach_this_step
+        self.net = net
+        self.dataset = dataset
+        if type_cossim == 'translation':
+            self.cossim = CosSimTranslation(self.net, self.dataset)
+        else:
+            assert False, 'Type Cosine Similarity not Implemented'
+
+        super().__init__()
+
+    def on_train_end(self, logs=None):
+        cossim = self.cossim.calculate_cossim_network()
+
+
+

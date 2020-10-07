@@ -182,10 +182,6 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None):
         std = [0.2, 0.2, 0.2]
         Warning('MEAN, STD AND DATASET_NAME NOT SET FOR NEPTUNE LOGGING. This message is not referring to normalizing in PyTorch')
 
-    # neptune.log_text('{} mean'.format(dataset_name), str(mean))
-    # neptune.log_text('{} std'.format(dataset_name), str(std))
-    # wandb.log({'{} mean'.format(dataset_name): str(mean),
-    #           '{} std'.format(dataset_name) : str(std)})
     wandb.run.summary['{} mean'.format(dataset_name)] = mean
     wandb.run.summary['{} std'.format(dataset_name)] = std
 
@@ -233,13 +229,6 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None):
                                                                              text=f'{lb}' +
                                                                                   os.path.splitext(n)[0]).astype(np.uint8))
              for im, lb, n in zip(images, labels, add_text)]}, step=0)
-
-            # [neptune.log_image('{} example images: [{}]'.format(log_text, dataset_name),
-            #                    (convert_normalized_tensor_to_plottable_array(im, mean, std,
-            #                                                                         text=f'{str(lb)}' +
-            #                                                                              (f':"{nc[lb]}"' if nc[lb] != str(lb) else '') +
-            #                                                                              os.path.splitext(n)[0])).astype(np.uint8))
-            #  for im, lb, n in zip(images, labels.numpy(), add_text)]
 
         except StopIteration:
             Warning('Iteration stopped when plotting [{}] on Neptune'.format(dataset_name))
@@ -297,130 +286,6 @@ def copy_img_in_canvas(image: Image, size_canvas: tuple, position, color_canvas=
     canvas = canvas.convert('RGB')
     return canvas
 
-# class SaveInfoInDF(Callbacks):
-#     def __init__():
-#         super().__init__()
-#         index_dataframe = ['net', 'class_name', 'transl_X', 'transl_Y', 'tested_area', 'is_correct', 'class_output']
-
-#
-# def run_test_loader(net, is_server, network_name, data_loader, num_iterations, num_classes=None, name_dataset=None, translation_type_str=None, compute_dataframe=True, log_text=''):
-#     torch.cuda.empty_cache()
-#     index_dataframe = ['net', 'class_name', 'transl_X', 'transl_Y', 'tested_area', 'is_correct', 'class_output']
-#     if num_classes is None:
-#         num_classes = data_loader.dataset.num_classes
-#     if translation_type_str is None:
-#         translation_type_str = data_loader.dataset.translation_type_str
-#     if name_dataset is None:
-#         name_dataset = data_loader.dataset.name_generator
-#
-#     column_names = build_columns(['class {}'.format(i) for i in range(num_classes)])
-#
-#     net.eval()
-#     correct_tot = 0
-#     total_samples = 0
-#     rows_frames = []
-#     confusion_matrix = torch.zeros(num_classes, num_classes)
-#     reached_max_iter = False
-#     with torch.no_grad():
-#         for i, data in enumerate(data_loader, 0):
-#             images_batch, labels_batch_t, more = data
-#             face_center_batch_t = more['center']
-#             output_batch_t = net(images_batch.cuda() if is_server else images_batch)
-#             max_output, predicted_batch_t = torch.max(output_batch_t, 1)
-#             correct_batch_t = ((predicted_batch_t.cuda() if is_server else predicted_batch_t) == (labels_batch_t.cuda() if is_server else labels_batch_t))
-#             correct_tot += correct_batch_t.sum().item()
-#             for t, p in zip(labels_batch_t.view(-1), predicted_batch_t.view(-1)):
-#                 confusion_matrix[t.long(), p.long()] += 1
-#             # images_batch, lb, fc = next(iter(data_loader))
-#             # vis.imshow_batch(images_batch, data_loader.dataset.stats['mean'], data_loader.dataset.stats['std'])
-#             total_samples += labels_batch_t.size(0)
-#
-#             if compute_dataframe:
-#                 softmax_batch_t = torch.softmax(output_batch_t.cuda() if is_server else output_batch_t, 1)
-#                 softmax_batch = np.array(softmax_batch_t.tolist())
-#                 output_batch = np.array(output_batch_t.tolist())
-#                 labels = labels_batch_t.tolist()
-#                 predicted_batch = predicted_batch_t.tolist()
-#                 correct_batch = correct_batch_t.tolist()
-#                 face_center_batch = np.array([np.array(i) for i in face_center_batch_t]).transpose()
-#
-#                 for c, softmax_all_cat in enumerate(softmax_batch):
-#                     output = output_batch[c]
-#                     softmax = softmax_batch[c]
-#                     softmax_correct_category = softmax[labels[c]]
-#                     output_correct_category = output[labels[c]]
-#                     max_softmax = np.max(softmax)
-#                     max_output = np.max(output)
-#                     correct = correct_batch[c]
-#                     label = labels[c]
-#                     predicted = predicted_batch[c]
-#                     face_center = face_center_batch[c]
-#
-#                     assert softmax_correct_category == max_softmax if correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
-#                     assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
-#                     assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
-#
-#                     rows_frames.append([network_name, label, face_center[0], face_center[1], translation_type_str, correct, predicted, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
-#             if i >= num_iterations - 1:
-#                 reached_max_iter = True
-#                 print('Max iterations reached')
-#                 break
-#
-#         if not reached_max_iter:
-#             print('Dataset Exhausted')
-#         accuracy = 100.0 * correct_tot / total_samples
-#         print('*Dataset: {} on {} test images - Accuracy: {}%'.format(name_dataset, total_samples, accuracy))
-#         conf_mat_acc = (confusion_matrix / confusion_matrix.sum(1)[:, None]).numpy()
-#         # conf_mat_acc = np.zeros((5,5)) + 255
-#         if is_server:
-#             # Plot confidence Matrix
-#             neptune.log_metric('{} Acc'.format(name_dataset), accuracy)
-#             figure = plt.figure(figsize=(10, 7))
-#             sn.heatmap(conf_mat_acc, annot=True, annot_kws={"size": 16})  # font size
-#             plt.ylabel('truth')
-#             plt.xlabel('predicted')
-#             plt.title(name_dataset)
-#             neptune.log_image('{} Confusion Matrix'.format(log_text), figure)
-#
-#
-#     if compute_dataframe:
-#         data_frame = pd.DataFrame(rows_frames)
-#         data_frame = data_frame.set_index([i for i in range(len(index_dataframe))])
-#         data_frame.index.names = index_dataframe
-#         data_frame.columns = column_names
-#         data_frame.reset_index(level='is_correct', inplace=True)
-#
-#     else:
-#         data_frame = None
-#
-#     if is_server and compute_dataframe:
-#         mean_accuracy = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
-#         ax, fig, im = imshow_density(mean_accuracy, lim=[1 / data_loader.dataset.num_classes - 1 / data_loader.dataset.num_classes * 0.2, 1], plot_args={'interpolate': True})
-#         plt.title(name_dataset)
-#         cbar = fig.colorbar(im)
-#         cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)
-#         neptune.log_image('{} Density Plot Accuracy'.format(log_text), fig)
-#
-#     return data_frame, conf_mat_acc, accuracy
-
-#
-# def test_loader_and_save(testing_loader_list, compute_dataframe, net, is_server, network_name, num_iterations_testing, log_text=''):
-#     conf_mat_acc_all_tests = []
-#     accuracy_all_tests = []
-#
-#     print('Running the tests')
-#     df_testing = pd.DataFrame([])
-#     for testing_loader in testing_loader_list:
-#         df_testing_one, conf_mat_acc, accuracy = run_test_loader(net, is_server, network_name, testing_loader, num_iterations_testing, compute_dataframe=compute_dataframe, log_text=log_text)
-#         conf_mat_acc_all_tests.append(conf_mat_acc)
-#         accuracy_all_tests.append(accuracy)
-#         # df_post_priming['run no.'] = run  # saved from another file, can be useful here
-#         # [df_post_priming.set_index(i, append=True, inplace=True) for i in ['run no.']]
-#         df_testing = pd.concat((df_testing, df_testing_one))
-#
-#     return df_testing, conf_mat_acc_all_tests, accuracy_all_tests
-
-
 def convert_normalized_tensor_to_plottable_figure(tensor, mean, std, title_lab=None, title_more=''):
     tensor = tensor.numpy().transpose((1, 2, 0))
     image = std * tensor + mean
@@ -459,11 +324,6 @@ def convert_normalized_tensor_to_plottable_array(tensor, mean, std, text):
 def conver_tensor_to_plot(tensor, mean, std):
     tensor = tensor.numpy().transpose((1, 2, 0))
     # mean = np.array([0.485, 0.456, 0.406])
-    # std = np.array([0.229, 0.224, 0.225])
-    # mean = np.array([0.969, 0.969, 0.969])
-    # std = np.array([0.126, 0.126, 0.126])
-    # mean = np.array([0.969])
-    # std = np.array([0.138])
     image = std * tensor + mean
     image = np.clip(image, 0, 1)
     if np.shape(image)[2] == 1:
