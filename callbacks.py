@@ -20,6 +20,7 @@ from time import time
 import framework_utils as utils
 import pandas as pd
 import signal, os
+from cossim import CosSimTranslation, CosSimResize, CosSimRotate
 
 
 class CallbackList(object):
@@ -645,7 +646,7 @@ class ComputeConfMatrix(Callback):
         self.num_classes = num_classes
         self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
         self.send_to_neptune = send_to_weblog
-        self.neptune_text = weblog_text
+        self.log_text_plot = weblog_text
         self.reset_every = reset_every
         self.num_iter = 0
         super().__init__()
@@ -666,10 +667,9 @@ class ComputeConfMatrix(Callback):
             sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".1f", annot_kws={"size": 16})  # font size
             plt.ylabel('truth')
             plt.xlabel('predicted')
-            plt.title(self.neptune_text + ' last {} iters'.format(self.num_iter))
+            plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter))
             # neptune.log_image('Confusion Matrix [{}]'.format(self.neptune_text), figure)
-            wandb.log({'Confusion Matrix [{}]'.format(self.neptune_text): wandb.Image(plt)})
-            print('CONFUSION MAT PLOTTED**********')
+            wandb.log({'{}/Confusion Matrix'.format(self.log_text_plot): wandb.Image(plt)})
 
             plt.close()
 
@@ -805,29 +805,29 @@ class ComputeDataframe(Callback):
             cbar = fig.colorbar(im)
             cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)
             # neptune.log_image('{} Density Plot Accuracy'.format(self.log_text_plot), fig)
-            wandb.log({'{} Density Plot Accuracy'.format(self.log_text_plot): fig})
+            wandb.log({'{}/Density Plot'.format(self.log_text_plot): fig})
             plt.close()
 
             # Plot Scale Accuracy
             mean_accuracy_size_X = data_frame.groupby(['size_X']).mean()['is_correct']  # generally size_X = size_Y so for now we don't bother with both
             x = mean_accuracy_size_X.index.get_level_values('size_X')
-            plt.plot(x, mean_accuracy_size_X * 100)
+            plt.plot(x, mean_accuracy_size_X * 100, 'o-')
             plt.xlabel('Size item (horizontal)')
             plt.ylabel('Mean Accuracy (%)')
             plt.title('size-accuracy')
             print(f'Mean Accuracy Size: {mean_accuracy_size_X} for sizes: {x}')
-            wandb.log({'{} Size Accuracy'.format(self.log_text_plot): plt})
+            wandb.log({'{}/Size Accuracy'.format(self.log_text_plot): plt})
             plt.close()
 
             # Plot Rotation Accuracy
             mean_accuracy_rotation = data_frame.groupby(['rotation']).mean()['is_correct']  # generally size_X = size_Y so for now we don't bother with both
             x = mean_accuracy_rotation.index.get_level_values('rotation')
-            plt.plot(x, mean_accuracy_rotation * 100)
+            plt.plot(x, mean_accuracy_rotation * 100, 'o-')
             plt.xlabel('Rotation item (degree)')
             plt.ylabel('Mean Accuracy (%)')
             plt.title('rotation-accuracy')
             print(f'Mean Accuracy Rotation: {mean_accuracy_rotation} for rotation: {x}')
-            wandb.log({'{} Rotation Accuracy'.format(self.log_text_plot): plt})
+            wandb.log({'{}/Rotation Accuracy'.format(self.log_text_plot): plt})
             plt.close()
 
         logs['dataframe'] = data_frame
@@ -879,27 +879,52 @@ class PlotGradientWeblog(Callback):
             plt.title("Gradient flow iter{}".format(logs['tot_iter']))
             plt.grid(True)
             # neptune.log_image('Gradient Plot [{}]'.format(self.log_txt), figure)
-            wandb.log({'Gradient Plot [{}]'.format(self.log_txt): wandb.Image(plt)})
+            wandb.log({'Hidden Panels/Gradient Plot [{}]'.format(self.log_txt): wandb.Image(plt)})
 
             self.grad = []
             plt.close()
 
-
-from cossim import CosSimTranslation
 class ComputeCosineSimilarity(Callback):
-    def __init__(self, net, dataset, type_cossim='translation'):
+    def __init__(self, net, dataset, type_cossim='translation', save_path=None, log_text_plot='cossim'):
         # ToDo: for now always compute at the end but we can compute it at anytime changing detach_this_step
+        self.log_text_plot = log_text_plot
         self.net = net
         self.dataset = dataset
-        if type_cossim == 'translation':
+        self.type_cossim = type_cossim
+        if self.type_cossim == 'translation':
             self.cossim = CosSimTranslation(self.net, self.dataset)
+        elif self.type_cossim == 'resize':
+            self.cossim = CosSimResize(self.net, self.dataset)
+        elif self.type_cossim == 'rotate':
+            self.cossim = CosSimRotate(self.net, self.dataset)
         else:
             assert False, 'Type Cosine Similarity not Implemented'
+        self.save_path = save_path
 
         super().__init__()
 
+    @staticmethod
+    def get_mean_std(cy, layer_name):
+        cy = np.array([cy[y][layer_name] for y in cy])
+        cymean = np.mean(cy, axis=0)
+        cystd = np.std(cy, axis=0)
+        return np.array(cymean), np.array(cystd)
+
     def on_train_end(self, logs=None):
-        cossim = self.cossim.calculate_cossim_network()
+        cossim, x_values = self.cossim.calculate_cossim_network()
+        penultimate_layer = list(cossim[0].keys())[-2]
+        m, s = self.get_mean_std(cossim, penultimate_layer)
+        # This could be moved to the appropriate cossim subclass if needed
+        plt.plot(x_values, m, 'o')
+        plt.fill_between(x_values, m - s, m + s, alpha=0.10)
+        plt.xlabel('Values')
+        plt.ylabel('Cosine Similarity')
+        wandb.log({'{}/Cosine Similarity [{}]'.format(self.log_text_plot, self.type_cossim): wandb.Image(plt)})
+        plt.close()
+
+        if self.save_path is not None:
+            pathlib.Path(os.path.dirname(self.save_path)).mkdir(parents=True, exist_ok=True)
+
 
 
 

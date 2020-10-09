@@ -17,6 +17,8 @@ from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
 import time
 import wandb
+
+
 # from wandb import magic
 
 class Experiment(ABC):
@@ -27,7 +29,7 @@ class Experiment(ABC):
             self.use_cuda = True
         parser = utils.parse_experiment_arguments(parser)
         PARAMS = vars(parser.parse_known_args()[0])
-
+        self.net = None
         self.current_run = -1
         # self.experiment_name = experiment_name
         self.num_runs = PARAMS['num_runs']  # this is not used here, and it shouldn't be here, but for now we are creating a weblogger session when an Experiment is created, and we want to save this as a parameter, so we need to do it here.
@@ -50,7 +52,6 @@ class Experiment(ABC):
         self.size_object = None if self.size_object == '0' else self.size_object
         self.experiment_data = {}
         self.experiment_loaders = {}  # we separate data from loaders because loaders are pickled objects and may broke when module name changes. If this happens, at least we preserve the data. We generally don't even need the loaders much.
-
 
         if self.force_cuda:
             self.use_cuda = True
@@ -102,16 +103,15 @@ class Experiment(ABC):
             for loader in test_loaders_list:
                 utils.weblog_dataset_info(loader, log_text=loader.dataset.name_generator)
 
-
     @abstractmethod
-    def call_run(self, train_loader, net, params_to_update, callbacks=None, train=True, epochs=20):
+    def call_run(self, train_loader, params_to_update, callbacks=None, train=True, epochs=20):
         pass
 
     @abstractmethod
     def get_net(self, network_name, num_classes, pretraining, grayscale):
         return None, None
 
-    def prepare_train_callbacks(self, net, log_text, num_classes):
+    def prepare_train_callbacks(self, log_text, num_classes):
         nept_check_every = 5
         console_check_every = 100
         all_cb = [StandardMetrics(log_every=console_check_every, print_it=True,
@@ -122,7 +122,7 @@ class Experiment(ABC):
                                 reaching_goal=self.stop_when_train_acc_is,
                                 metric_name='nept/mean_acc' if self.use_weblog else 'cnsl/mean_acc',
                                 check_every=nept_check_every if self.use_weblog
-                                else console_check_every), # once reached a certain accuracy
+                                else console_check_every),  # once reached a certain accuracy
                   EarlyStopping(min_delta=0.01, patience=self.patience_stagnation, percentage=True, mode='min',
                                 reaching_goal=None,
                                 metric_name='nept/mean_loss' if self.use_weblog else 'cnsl/mean_loss',
@@ -139,7 +139,7 @@ class Experiment(ABC):
                   StopFromUserInput(),
                   PlotTimeElapsed(time_every=100)]
 
-        all_cb += ([SaveModel(net, self.model_output_filename, self.use_weblog)] if self.model_output_filename is not None else [])
+        all_cb += ([SaveModel(self.net, self.model_output_filename, self.use_weblog)] if self.model_output_filename is not None else [])
         if self.use_weblog:
             all_cb += [StandardMetrics(log_every=nept_check_every, print_it=False,
                                        use_cuda=self.use_cuda,
@@ -148,7 +148,7 @@ class Experiment(ABC):
                        RollingAccEachClassWeblog(log_every=nept_check_every,
                                                  num_classes=num_classes,
                                                  weblog_text=log_text),
-                       PlotGradientWeblog(net=net, log_every=50, plot_every=500, log_txt=log_text),
+                       PlotGradientWeblog(net=self.net, log_every=50, plot_every=500, log_txt=log_text),
                        ]
 
         return all_cb
@@ -158,15 +158,15 @@ class Experiment(ABC):
 
     def train(self, train_loader, callbacks=None, log_text='train'):
         self.experiment_loaders[self.current_run]['training'].append(train_loader)
-        net, params_to_update = self.get_net(self.network_name,
-                                             num_classes=self._get_num_classes(train_loader),
-                                             pretraining=self.pretraining,
-                                             grayscale=train_loader.dataset.grayscale)
-        all_cb = self.prepare_train_callbacks(net, log_text, self._get_num_classes(train_loader))
+        self.net, params_to_update = self.get_net(self.network_name,
+                                                  num_classes=self._get_num_classes(train_loader),
+                                                  pretraining=self.pretraining,
+                                                  grayscale=train_loader.dataset.grayscale)
+        all_cb = self.prepare_train_callbacks(log_text, self._get_num_classes(train_loader))
 
         all_cb += (callbacks or [])
-        assert self._get_num_classes(train_loader) == net.classifier[-1].out_features, f"Net output size [{net.classifier[-1].out_features}] doesn't match number of classes [{self._get_num_classes(train_loader)}]"
-        net, logs = self.call_run(train_loader, net, params_to_update, train=True, callbacks=all_cb)
+        assert self._get_num_classes(train_loader) == self.net.classifier[-1].out_features, f"Net output size [{self.net.classifier[-1].out_features}] doesn't match number of classes [{self._get_num_classes(train_loader)}]"
+        net, logs = self.call_run(train_loader, params_to_update, train=True, callbacks=all_cb)
         return net
 
     def finalize_test(self, df_testing, conf_mat, accuracy):
@@ -207,7 +207,7 @@ class Experiment(ABC):
             all_cb = self.prepare_test_callbacks(self._get_num_classes(testing_loader), log_text[idx] if log_text is not None else '', testing_loader.dataset.translation_type_str, save_dataframe)
             all_cb += (callbacks or [])
 
-            net, logs = self.call_run(testing_loader, net,
+            net, logs = self.call_run(testing_loader,
                                       params_to_update=net.parameters(), train=False,
                                       callbacks=all_cb,
                                       epochs=1)
@@ -274,10 +274,10 @@ class StandardTrainingExperiment(Experiment):
         list_tags.append(f'bs{self.batch_size}') if self.batch_size != 32 else None
         super().finalize_init(PARAMS, list_tags)
 
-    def call_run(self, loader, net, params_to_update, train=True, callbacks=None, epochs=20):
+    def call_run(self, loader, params_to_update, train=True, callbacks=None, epochs=20):
         return run(loader,
                    use_cuda=self.use_cuda,
-                   net=net,
+                   net=self.net,
                    callbacks=callbacks,
                    loss_fn=utils.make_cuda(torch.nn.CrossEntropyLoss(), self.use_cuda),
                    optimizer=torch.optim.Adam(params_to_update,
@@ -327,7 +327,11 @@ class StandardTrainingExperiment(Experiment):
 
     @staticmethod
     def prepare_load(network, num_classes, pretrain_path, type_net):
-        find_ouptut = int(re.findall('\d+', re.findall(r'o\d+', pretrain_path)[0])[0])
+        try:
+            find_output = int(re.findall('\d+', re.findall(r'o\d+', pretrain_path)[0])[0])
+        except:
+            print(f'Some problems when checking the output class num for path: {pretrain_path}')
+            assert False
         find_gap = 'gap1' in pretrain_path
         find_sFC = 'sFC1' in pretrain_path
         find_bC = 'bC1' in pretrain_path
@@ -341,14 +345,14 @@ class StandardTrainingExperiment(Experiment):
                     print('**Pretraining model has a shallow FC!')
                     network.classifier = torch.nn.Linear(16 * 224 * 224, num_classes)
             else:
-                network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, find_ouptut)
+                network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, find_output)
             # ToDo: no found NP option for small network
         if type_net == TypeNet.VGG:
             if find_sFC:
                 print('**Pretraing model has a shallow FC!')
                 network.classifier = torch.nn.Linear(512 * 7 * 7, num_classes)
             else:
-                network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, find_ouptut)
+                network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, find_output)
             if find_gap:
                 print('**Pretraing model has a GAP!')
                 network.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
@@ -368,9 +372,9 @@ class StandardTrainingExperiment(Experiment):
                     network.classifier[0] = torch.nn.Linear(512 * 12 * 12, 4096)
 
         if type_net == TypeNet.RESNET:
-            network.fc = torch.nn.Linear(network.fc.in_features, find_ouptut)
+            network.fc = torch.nn.Linear(network.fc.in_features, find_output)
         if type_net == TypeNet.FC:
-            network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, find_ouptut)
+            network.classifier[-1] = torch.nn.Linear(network.classifier[-1].in_features, find_output)
 
         return network
 
@@ -551,6 +555,7 @@ class FewShotLearningExp(Experiment):
                         'matching_net_plus' the decision is made by an evaluation network. It accepts 128x128px images.
                         #ToDo: with a adaptive average pool make it accept whatever size
     '''
+
     def __init__(self, experiment_class_name):
         parser = argparse.ArgumentParser(allow_abbrev=False)
         parser = utils.parse_few_shot_learning_parameters(parser)
@@ -623,8 +628,8 @@ class FewShotLearningExp(Experiment):
                    iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q},
                    epochs=epochs)
 
-    def prepare_train_callbacks(self, net, log_text, num_classes):
-        all_cb = super().prepare_train_callbacks(net, log_text, num_classes)
+    def prepare_train_callbacks(self, log_text, num_classes):
+        all_cb = super().prepare_train_callbacks(log_text, num_classes)
         idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
         assert len(idx_ccm) == 1
         all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=num_classes,

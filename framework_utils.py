@@ -54,7 +54,7 @@ def parse_experiment_arguments(parser=None):
                         default=None)
     parser.add_argument("-prjnm", "--project_name",
                         type=str,
-                        default='RandomProject')
+                        default='TestProject')
     parser.add_argument("-wbg", "--wandb_group_name",
                         help="Group name for weight and biases, to organize sub experiments of a bigger project",
                         type=str,
