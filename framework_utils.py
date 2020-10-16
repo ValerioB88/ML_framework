@@ -331,11 +331,13 @@ def conver_tensor_to_plot(tensor, mean, std):
     return image
 
 
-def imshow_batch(inp, mean=None, std=None, title_lab=None, title_more=''):
-    if mean is None:
+def imshow_batch(inp, stats=None, title_lab=None, title_more=''):
+    if stats is None:
         mean = np.array([0.5, 0.5, 0.5])
-    if std is None:
         std = np.array([0.5, 0.5, 0.5])
+    else:
+        mean = stats['mean']
+        std = stats['std']
     """Imshow for Tensor."""
     fig = plt.figure(1, facecolor='gray')
     for idx, image in enumerate(inp):

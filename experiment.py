@@ -165,8 +165,10 @@ class Experiment(ABC):
         all_cb = self.prepare_train_callbacks(log_text, self._get_num_classes(train_loader))
 
         all_cb += (callbacks or [])
-        assert self._get_num_classes(train_loader) == self.net.classifier[-1].out_features, f"Net output size [{self.net.classifier[-1].out_features}] doesn't match number of classes [{self._get_num_classes(train_loader)}]"
-        net, logs = self.call_run(train_loader, params_to_update, train=True, callbacks=all_cb)
+        # assert self._get_num_classes(train_loader) == self.net.classifier[-1].out_features, f"Net output size [{self.net.classifier[-1].out_features}] doesn't match number of classes [{self._get_num_classes(train_loader)}]"
+        net, logs = self.call_run(train_loader,
+                                  params_to_update=params_to_update,
+                                  train=True, callbacks=all_cb)
         return net
 
     def finalize_test(self, df_testing, conf_mat, accuracy):
@@ -615,12 +617,12 @@ class FewShotLearningExp(Experiment):
         print(net)
         return net, net.parameters()
 
-    def call_run(self, data_loader, net, params_to_update, callbacks=None, train=True, epochs=20):
+    def call_run(self, data_loader, params_to_update, callbacks=None, train=True, epochs=20):
         if data_loader.dataset.num_classes < self.k:
             warnings.warn(f'Experiment: Number of classes in the folder {data_loader.dataset.folder} < k ({self.k}. K will be changed to {data_loader.dataset.num_classes}')
             self.k = data_loader.dataset.num_classes
 
-        return run(data_loader, use_cuda=self.use_cuda, net=net,
+        return run(data_loader, use_cuda=self.use_cuda, net=self.net,
                    callbacks=callbacks,
                    loss_fn=utils.make_cuda(self.lossfn, self.use_cuda),
                    optimizer=Adam(params_to_update, lr=0.001 if self.learning_rate is None else self.learning_rate),

@@ -84,7 +84,6 @@ class MatchingNetPlus(nn.Module):
         self.evaluator = get_few_shot_evaluator((self.k * self.n + 1) * 512 * 4, self.k)
 
 
-
 class MatchingNetwork(nn.Module):
     def __init__(self, n: int, k: int, q: int, fce: bool, num_input_channels: int,
                  lstm_layers: int, lstm_input_size: int, unrolling_steps: int, device: torch.device, encoder=get_few_shot_encoder_basic):

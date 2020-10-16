@@ -6,6 +6,7 @@ import torch
 from typing import Callable, List, Union
 from callbacks import DefaultCallback, ProgressBarLogger, CallbackList, Callback
 from framework_utils import make_cuda
+import framework_utils
 from torch._six import inf
 EPSILON = 1e-8
 
@@ -116,7 +117,6 @@ def matching_net_predictions(attention: torch.Tensor, n: int, k: int, q: int, us
 
     # Create one hot label vector for the support set
     y_onehot = torch.zeros(k * n, k)
-
     # Unsqueeze to force y to be of shape (K*n, 1) as this
     # is needed for .scatter()
     y = create_nshot_task_label(k, n).unsqueeze(-1)
