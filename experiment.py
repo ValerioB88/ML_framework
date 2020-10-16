@@ -6,12 +6,13 @@ import re
 import argparse
 from torch.optim import Adam
 from abc import ABC, abstractmethod
+from functools import partial
 from typing import Dict, List, Callable, Union
 from torch.nn.modules.loss import MSELoss, CrossEntropyLoss, NLLLoss
 
 from callbacks import *
 import framework_utils as utils
-from models.meta_learning_models import MatchingNetwork, MatchingNetPlus, RelationNetSung, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
+from models.meta_learning_models import MatchingNetwork, RelationNetSung, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
 from models.FCnets import FC4
 from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
@@ -44,7 +45,7 @@ class Experiment(ABC):
         self.force_cuda = PARAMS['force_cuda']
         self.additional_tags = PARAMS['additional_tags']
         self.size_object = PARAMS['size_object']
-        self.use_weblog = PARAMS['use_weblog']
+        self.weblogger = PARAMS['use_weblog']
         self.group_name = PARAMS['wandb_group_name']
         self.project_name = PARAMS['project_name']
         self.patience_stagnation = PARAMS['patience_stagnation']
@@ -66,7 +67,7 @@ class Experiment(ABC):
         list_tags.append('lr{}'.format("{:2f}".format(self.learning_rate).split(".")[1])) if self.learning_rate is not None else None
         if self.size_object is not None:
             self.size_object = tuple([int(i) for i in self.size_object.split("_")])
-            list_tags.append('so{}'.format(self.size_object)) if self.size_object != (50, 50) else None
+            list_tags.append('so{}'.format(self.size_object).replace(', ','x')) if self.size_object != (50, 50) else None
         else:
             list_tags.append('orsize')
 
@@ -84,24 +85,31 @@ class Experiment(ABC):
 
     def finalize_init(self, PARAMS, list_tags):
         print('***PARAMS***')
+        if not self.use_cuda:
+            list_tags.append('LOCALTEST')
         for i in sorted(PARAMS.keys()):
             print(f'\t{i} : {PARAMS[i]}')
-        self.initialize_weblogger(self.experiment_name, self.project_name, self.group_name, PARAMS, list_tags) if self.use_weblog else None
+        if self.weblogger == 1:
+            a = time.time()
+            wandb.init(name=self.experiment_name, project=self.project_name, tags=list_tags, group=self.group_name, config=PARAMS)
+            print('Weblogger Creation: WANDB {}'.format(time.time() - a))
+        if self.weblogger == 2:
+            PARAMS.update({'group_name': self.group_name})
+            neptune.init(f'valeriobiscione/{self.project_name}')
+            neptune.create_experiment(name=self.experiment_name,
+                                      params=PARAMS,
+                                      tags=list_tags)
+
         self.new_run()
 
     @staticmethod
-    def initialize_weblogger(experiment_name, project_name, group_name, PARAMS, list_tags):
-        a = time.time()
-        wandb.init(name=experiment_name, project=project_name, tags=list_tags, group=group_name, config=PARAMS)
-        print('Weblogger Creation: {}'.format(time.time() - a))
-
-    @staticmethod
-    def weblogging_plot_generators_info(train_loader=None, test_loaders_list=None):
-        if train_loader is not None:
-            utils.weblog_dataset_info(train_loader, log_text=train_loader.dataset.name_generator)
-        if test_loaders_list is not None:
-            for loader in test_loaders_list:
-                utils.weblog_dataset_info(loader, log_text=loader.dataset.name_generator)
+    def weblogging_plot_generators_info(train_loader=None, test_loaders_list=None, weblogger=1):
+        if weblogger:
+            if train_loader is not None:
+                utils.weblog_dataset_info(train_loader, log_text=train_loader.dataset.name_generator, weblogger=weblogger)
+            if test_loaders_list is not None:
+                for loader in test_loaders_list:
+                    utils.weblog_dataset_info(loader, log_text=loader.dataset.name_generator, weblogger=weblogger)
 
     @abstractmethod
     def call_run(self, train_loader, params_to_update, callbacks=None, train=True, epochs=20):
@@ -116,39 +124,40 @@ class Experiment(ABC):
         console_check_every = 100
         all_cb = [StandardMetrics(log_every=console_check_every, print_it=True,
                                   use_cuda=self.use_cuda,
-                                  to_weblog=False, log_text=log_text,
+                                  weblogger=0, log_text=log_text,
                                   metrics_prefix='cnsl'),
                   EarlyStopping(min_delta=0.01, patience=800, percentage=True, mode='max',
                                 reaching_goal=self.stop_when_train_acc_is,
-                                metric_name='nept/mean_acc' if self.use_weblog else 'cnsl/mean_acc',
-                                check_every=nept_check_every if self.use_weblog
+                                metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
+                                check_every=nept_check_every if self.weblogger
                                 else console_check_every),  # once reached a certain accuracy
                   EarlyStopping(min_delta=0.01, patience=self.patience_stagnation, percentage=True, mode='min',
                                 reaching_goal=None,
-                                metric_name='nept/mean_loss' if self.use_weblog else 'cnsl/mean_loss',
-                                check_every=nept_check_every if self.use_weblog
+                                metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
+                                check_every=nept_check_every if self.weblogger
                                 else console_check_every),  # for stagnation
                   StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_weblog=self.use_weblog, log_text=log_text),
+                                      to_weblog=self.weblogger, log_text=log_text),
                   ComputeConfMatrix(num_classes=num_classes,
-                                    send_to_weblog=self.use_weblog,
+                                    weblogger=self.weblogger,
                                     weblog_text=log_text,
                                     reset_every=200),
 
                   StopFromUserInput(),
                   PlotTimeElapsed(time_every=100)]
 
-        all_cb += ([SaveModel(self.net, self.model_output_filename, self.use_weblog)] if self.model_output_filename is not None else [])
-        if self.use_weblog:
+        all_cb += ([SaveModel(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
+        if self.weblogger:
             all_cb += [StandardMetrics(log_every=nept_check_every, print_it=False,
                                        use_cuda=self.use_cuda,
-                                       to_weblog=True, log_text=log_text,
-                                       metrics_prefix='nept'),
+                                       weblogger=self.weblogger, log_text=log_text,
+                                       metrics_prefix='webl'),
                        RollingAccEachClassWeblog(log_every=nept_check_every,
                                                  num_classes=num_classes,
-                                                 weblog_text=log_text),
-                       PlotGradientWeblog(net=self.net, log_every=50, plot_every=500, log_txt=log_text),
+                                                 weblog_text=log_text,
+                                                 weblogger=self.weblogger),
+                       PlotGradientWeblog(net=self.net, log_every=50, plot_every=500, log_txt=log_text, weblogger=self.weblogger),
                        ]
 
         return all_cb
@@ -179,9 +188,9 @@ class Experiment(ABC):
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
         all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_weblog=self.use_weblog, log_text=log_text),
+                                      to_weblog=self.weblogger, log_text=log_text),
                   ComputeConfMatrix(num_classes=num_classes,
-                                    send_to_weblog=self.use_weblog,
+                                    send_to_weblogger=self.weblogger,
                                     weblog_text=log_text),
                   ]
         size_canvas = self.size_canvas if hasattr(self, 'size_canvas') else (224, 224)
@@ -189,7 +198,7 @@ class Experiment(ABC):
                                      self.use_cuda,
                                      translation_type_str,
                                      self.network_name, size_canvas,
-                                     log_density_weblog=True if self.use_weblog else False, log_text_plot=log_text)]
+                                     log_density_weblog=True if self.weblogger else False, log_text_plot=log_text)]
                    if save_dataframe else [])
         return all_cb
 
@@ -576,7 +585,9 @@ class FewShotLearningExp(Experiment):
         self.q = PARAMS['q_queries']
         self.size_canvas = PARAMS['size_canvas']
         list_tags.append(f'{self.k}w_{self.n}s_{self.q}q')
-        list_tags.append(f'sc{self.size_canvas}')
+        list_tags.append(f'sc{self.size_canvas}'.replace(', ', 'x'))
+        print('LIST TAGS:')
+        print(list_tags)
         super().finalize_init(PARAMS, list_tags)
 
     def get_net(self, network_name, num_classes, pretraining, grayscale=False):
@@ -603,15 +614,14 @@ class FewShotLearningExp(Experiment):
             self.step = matching_net_step
             self.lossfn = torch.nn.NLLLoss()
 
-        if network_name == 'matching_net_plus':
-            net = MatchingNetPlus(self.n, self.k, self.q,
-                                  num_input_channels=1 if grayscale else 3)
-            self.step = matching_net_step_plus
-            self.lossfn = CrossEntropyLoss()
-
         if network_name == 'relation_net':
             net = RelationNetSung(size_canvas=self.size_canvas)
             self.step = relation_net_step
+            self.lossfn = MSELoss()
+
+        if network_name == 'relation_net_cat':  # this is my version of relation_net where we contactenate embedded samples
+            net = RelationNetSung(size_canvas=self.size_canvas, n_shots=self.n)
+            self.step = partial(relation_net_step, concatenate=True)
             self.lossfn = MSELoss()
         print('***Network***')
         print(net)
@@ -635,7 +645,7 @@ class FewShotLearningExp(Experiment):
         idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
         assert len(idx_ccm) == 1
         all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=num_classes,
-                                                   send_to_weblog=self.use_weblog,
+                                                   weblogger=self.weblogger,
                                                    weblog_text=log_text,
                                                    reset_every=200)
         return all_cb
@@ -649,14 +659,14 @@ class FewShotLearningExp(Experiment):
                                                  self.use_cuda,
                                                  translation_type_str,
                                                  self.network_name, self.size_canvas,
-                                                 log_density_weblog=True if self.use_weblog else False,
+                                                 log_density_weblog=self.weblogger,
                                                  log_text_plot=log_text,
                                                  output_and_softmax=False)
 
         idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
         assert len(idx_ccm) == 1
         all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=num_classes,
-                                                   send_to_weblog=self.use_weblog,
+                                                   weblogger=self.weblogger,
                                                    weblog_text=log_text,
                                                    reset_every=None)
 

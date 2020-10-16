@@ -126,49 +126,6 @@ def matching_net_predictions(attention: torch.Tensor, n: int, k: int, q: int, us
 
     return y_pred
 
-def matching_net_step_plus(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries):
-    logs = {}
-    x, y_real_labels, more = data
-    if train:
-        model.train()
-        optimizer.zero_grad()
-    else:
-        model.eval()
-    embeddings = model.encoder(make_cuda(x, use_cuda))
-    y = torch.arange(0, k_way, 1 / q_queries).long()
-
-    # Samples are ordered by the NShotWrapper class as follows:
-    # k lots of n support samples from a particular class
-    # k lots of q query samples from those classes
-    support = embeddings[:n_shot * k_way]
-    queries = embeddings[n_shot * k_way:]
-    support_and_test = make_cuda(torch.tensor([]), use_cuda)
-    for q in queries:
-        # support_and_test = torch.cat((support_and_test, torch.cat((support, make_cuda(torch.unsqueeze(q, 0), use_cuda))).flatten(start_dim=0, end_dim=1).unsqueeze(0)), dim=0)
-        support_and_test = torch.cat((support_and_test, torch.cat((support.flatten(), make_cuda(q, use_cuda))).unsqueeze(0)))
-
-    # support_and_test = support_and_test.permute(dims=[1, 0, 2, 3])
-    output = model.evaluator(support_and_test)
-
-    _, predicted = torch.max(output, 1)
-
-    loss = loss_fn(make_cuda(output, use_cuda),
-                   make_cuda(y, use_cuda))
-
-    selected_classes = y_real_labels[n_shot * k_way::n_shot]
-    prediction_real_labels = selected_classes[predicted]
-    queries_real_labels = y_real_labels[n_shot * k_way:]
-    logs['output'] = output
-    logs['more'] = more
-    logs['more']['center'] = [i[n_shot * k_way:] for i in logs['more']['center']]
-    logs['y_pred_real_lab'] = prediction_real_labels
-    logs['y_true_real_lab'] = queries_real_labels
-
-    if train:
-        loss.backward()
-        clip_grad_norm_(model.parameters(), 1)
-        optimizer.step()
-    return loss, y, predicted, logs
 
 def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries, distance='l2', fce=False):
     logs = {}
@@ -218,7 +175,8 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         optimizer.step()
     return loss, y, predicted, logs
 
-def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries):
+
+def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries, concatenate=False):
     logs = {}
     x, y_real_labels, more = data
     if train:
@@ -226,6 +184,7 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         optimizer.zero_grad()
     else:
         model.eval()
+    # framework_utils.imshow_batch(x)
     y_onehot = torch.zeros(q_queries * k_way, k_way)
     y = torch.arange(0, k_way, 1 / q_queries)
     y_onehot = y_onehot.scatter(1, y.unsqueeze(-1).long(), 1)
@@ -238,8 +197,15 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     queries = embeddings[n_shot * k_way:]
 
     batch = make_cuda(torch.tensor([]), use_cuda)
-    # sum across n_shots
-    summed_supp = support.view(n_shot, k_way, *support.size()[-3:]).sum(dim=0)
+
+    if concatenate:
+        # concatenate all features (used in relation_net_cat)
+        summed_supp = support.view(k_way, n_shot, *support.size()[-3:]).reshape(k_way, support.shape[1] * n_shot, *support.shape[-2:])
+    else:
+        # sum across n_shots as in classic relation_net
+        summed_supp = support.view(k_way, n_shot, *support.size()[-3:]).sum(dim=1)
+
+    # this could be done without for loop, but for now it seems to be fast enough
     for idx, q in enumerate(queries):
         # K_WAY x 64 * (K_WAY + 1) x 56 x 56
         episode = torch.cat((summed_supp, q.expand(k_way, -1, -1, -1)), dim=1)

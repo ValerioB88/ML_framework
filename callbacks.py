@@ -21,6 +21,7 @@ import framework_utils as utils
 import pandas as pd
 import signal, os
 from cossim import CosSimTranslation, CosSimResize, CosSimRotate
+# from neptunecontrib.api import log_chart
 
 
 class CallbackList(object):
@@ -555,10 +556,10 @@ class StopWhenMetricIs(Callback):
 
 
 class SaveModel(Callback):
-    def __init__(self, net, output_path, log_in_neptune=False):
+    def __init__(self, net, output_path, log_in_weblogger=False):
         self.output_path = output_path
         self.net = net
-        self.log_in_neptune = log_in_neptune
+        self.log_in_weblogger = log_in_weblogger
         super().__init__()
 
     def on_train_end(self, logs=None):
@@ -570,10 +571,10 @@ class SaveModel(Callback):
 
 
 class Metrics(Callback):
-    def __init__(self, use_cuda, log_every, to_neptune=True, log_text=''):
+    def __init__(self, use_cuda, log_every, weblogger=1, log_text=''):
         self.use_cuda = use_cuda
         self.log_every = log_every
-        self.to_neptune = to_neptune
+        self.to_weblogger = weblogger
         self.log_text = log_text
         self.correct_train, self.total_samples = 0, 0
         super().__init__()
@@ -585,8 +586,8 @@ class Metrics(Callback):
 
 
 class RunningMetrics(Metrics):
-    def __init__(self, use_cuda, log_every, to_neptune=True, log_text=''):
-        super().__init__(use_cuda, log_every, to_neptune, log_text)
+    def __init__(self, use_cuda, log_every, weblogger=1, log_text=''):
+        super().__init__(use_cuda, log_every, weblogger, log_text)
         self.running_loss = 0
         self.init_classic_logs()
 
@@ -604,8 +605,8 @@ class RunningMetrics(Metrics):
 
 
 class StandardMetrics(RunningMetrics):
-    def __init__(self, log_every=5, print_it=True, use_cuda=True, to_weblog=True, log_text='', metrics_prefix=''):
-        super().__init__(use_cuda, log_every, to_weblog, log_text)
+    def __init__(self, log_every=5, print_it=True, use_cuda=True, weblogger=True, log_text='', metrics_prefix=''):
+        super().__init__(use_cuda, log_every, weblogger, log_text)
         self.print_it = print_it
         self.metrics_prefix = metrics_prefix
 
@@ -616,18 +617,20 @@ class StandardMetrics(RunningMetrics):
             batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc()
             if self.print_it:
                 print('[iter{}] loss: {}, train_acc: {}'.format(batch_logs['tot_iter'], batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
-            if self.to_neptune:
-                # neptune.send_metric('{} / Mean Running Loss '.format(self.log_text), batch_logs[f'{self.metrics_prefix}/mean_loss'])
-                # neptune.send_metric('{} / Mean Train Accuracy train'.format(self.log_text), batch_logs[f'{self.metrics_prefix}/mean_acc'])
-                wandb.log({'{} / Mean Running Loss '.format(self.log_text): batch_logs[f'{self.metrics_prefix}/mean_loss'],
-                           '{} / Mean Train Accuracy train'.format(self.log_text): batch_logs[f'{self.metrics_prefix}/mean_acc']})
-                        #  step=batch_logs['tot_iter'])
+            metric1 = 'Metric/{}/ Mean Running Loss '.format(self.log_text)
+            metric2 = 'Metric/{}/ Mean Train Accuracy train'.format(self.log_text)
+            if self.to_weblogger == 1:
+                wandb.log({metric1: batch_logs[f'{self.metrics_prefix}/mean_loss'],
+                           metric2: batch_logs[f'{self.metrics_prefix}/mean_acc']})
+            if self.to_weblogger == 2:
+                neptune.send_metric(metric1, batch_logs[f'{self.metrics_prefix}/mean_loss'])
+                neptune.send_metric(metric2, batch_logs[f'{self.metrics_prefix}/mean_acc'])
             self.init_classic_logs()
 
 
 class TotalAccuracyMetric(Metrics):
     def __init__(self, use_cuda, to_weblog=True, log_text=''):
-        super().__init__(use_cuda, log_every=None, to_neptune=to_weblog, log_text=log_text)
+        super().__init__(use_cuda, log_every=None, weblogger=to_weblog, log_text=log_text)
 
     def on_training_step_end(self, batch_index, batch_logs=None):
         super().on_training_step_end(batch_index, batch_logs)
@@ -636,19 +639,21 @@ class TotalAccuracyMetric(Metrics):
     def on_train_end(self, logs=None):
         logs['total_accuracy'] = 100.0 * self.correct_train / self.total_samples
         print('Total Accuracy for [{}] samples, [{}]: {}%'.format(self.total_samples, self.log_text, logs['total_accuracy']))
-        if self.to_neptune:
-            # neptune.log_metric('{} Acc'.format(self.log_text), logs['total_accuracy'])
-            wandb.log({'{} Acc'.format(self.log_text): logs['total_accuracy']})
-
+        metric_str = 'Metric/{} Acc'.format(self.log_text)
+        if self.to_weblogger == 1:
+            wandb.log({metric_str: logs['total_accuracy']})
+        if self.to_weblogger == 2:
+            neptune.log_metric(metric_str, logs['total_accuracy'])
 
 class ComputeConfMatrix(Callback):
-    def __init__(self, num_classes, reset_every=None, send_to_weblog=True, weblog_text=''):
+    def __init__(self, num_classes, reset_every=None, send_to_weblogger=True, weblog_text='', weblogger=1):
         self.num_classes = num_classes
         self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
-        self.send_to_neptune = send_to_weblog
+        self.send_to_weblogger = send_to_weblogger
         self.log_text_plot = weblog_text
         self.reset_every = reset_every
         self.num_iter = 0
+        self.weblogger = weblogger
         super().__init__()
 
     def on_training_step_end(self, batch, logs=None):
@@ -662,24 +667,29 @@ class ComputeConfMatrix(Callback):
     def on_train_end(self, logs=None):
         logs['conf_mat_acc'] = (self.confusion_matrix / self.confusion_matrix.sum(1)[:, None]).numpy()
 
-        if self.send_to_neptune:
+        if self.send_to_weblogger:
             figure = plt.figure(figsize=(10, 7))
             sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".1f", annot_kws={"size": 16})  # font size
             plt.ylabel('truth')
             plt.xlabel('predicted')
             plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter))
-            # neptune.log_image('Confusion Matrix [{}]'.format(self.neptune_text), figure)
-            wandb.log({'{}/Confusion Matrix'.format(self.log_text_plot): wandb.Image(plt)})
+            metric_str = 'Confusion Matrix/{}'.format(self.log_text_plot)
+            if self.weblogger == 1:
+                wandb.log({metric_str: wandb.Image(plt)})
+            if self.weblogger == 2:
+                neptune.log_image(metric_str, figure)
+                # log_chart(name=metric_str, chart=figure)
 
             plt.close()
 
 
 class RollingAccEachClassWeblog(Callback):
-    def __init__(self, log_every, num_classes, weblog_text=''):
+    def __init__(self, log_every, num_classes, weblog_text='', weblogger=1):
         self.log_every = log_every
         self.confusion_matrix = torch.zeros(num_classes, num_classes)
         self.neptune_text = weblog_text
         self.num_classes = num_classes
+        self.weblogger = weblogger
         super().__init__()
 
     def on_training_step_end(self, batch, logs=None):
@@ -690,9 +700,11 @@ class RollingAccEachClassWeblog(Callback):
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
             if correct_class is not None:
                 for idx, cc in enumerate(correct_class.numpy()):
-                    # neptune.send_metric(f'Training {idx} Class Acc - [{self.neptune_text}]', cc * 100 if not np.isnan(cc) else -1)
-                    wandb.log({f'Training {idx} Class Acc - [{self.neptune_text}]': cc * 100 if not np.isnan(cc) else -1})
-                            #  step=logs['tot_iter'])
+                    metric_str = f'Metric/Class Acc Training {idx} - [{self.neptune_text}]'
+                    if self.weblogger == 1:
+                        wandb.log({metric_str: cc * 100 if not np.isnan(cc) else -1})  # step=logs['tot_iter'])
+                    if self.weblogger == 2:
+                        neptune.send_metric(metric_str, cc * 100 if not np.isnan(cc) else -1)
 
 
 class PlotTimeElapsed(Callback):
@@ -739,7 +751,7 @@ class ComputeDataframe(Callback):
         self.column_names = self.build_columns(['class {}'.format(i) for i in range(self.num_classes)])
         self.rows_frames = []
         self.use_cuda = use_cuda
-        self.plot_density_on_neptune = log_density_weblog
+        self.plot_density_on_weblogger = log_density_weblog
         self.log_text_plot = log_text_plot
 
     def on_training_step_end(self, batch, logs=None):
@@ -797,18 +809,23 @@ class ComputeDataframe(Callback):
             data_frame.columns = self.column_names
         data_frame.reset_index(level='is_correct', inplace=True)
 
-        if self.plot_density_on_neptune:
+        if self.plot_density_on_weblogger:
             # Plot Density Translation
             mean_accuracy_translation = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
             ax, fig, im = framework_utils.imshow_density(mean_accuracy_translation, plot_args={'interpolate': True, 'size_canvas': self.size_canvas}, vmin=1 / self.num_classes - 1 / self.num_classes * 0.2, vmax=1)
             plt.title(self.log_text_plot)
             cbar = fig.colorbar(im)
             cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)
-            # neptune.log_image('{} Density Plot Accuracy'.format(self.log_text_plot), fig)
-            wandb.log({'{}/Density Plot'.format(self.log_text_plot): fig})
+            metric_str = 'Density Plot/{}'.format(self.log_text_plot)
+            if self.plot_density_on_weblogger == 1:
+                wandb.log({metric_str: fig})
+            if self.plot_density_on_weblogger == 2:
+                neptune.log_image(metric_str, fig)
+
             plt.close()
 
             # Plot Scale Accuracy
+            fig, ax = plt.subplots(1, 1)
             mean_accuracy_size_X = data_frame.groupby(['size_X']).mean()['is_correct']  # generally size_X = size_Y so for now we don't bother with both
             x = mean_accuracy_size_X.index.get_level_values('size_X')
             plt.plot(x, mean_accuracy_size_X * 100, 'o-')
@@ -816,10 +833,15 @@ class ComputeDataframe(Callback):
             plt.ylabel('Mean Accuracy (%)')
             plt.title('size-accuracy')
             print(f'Mean Accuracy Size: {mean_accuracy_size_X} for sizes: {x}')
-            wandb.log({'{}/Size Accuracy'.format(self.log_text_plot): plt})
+            metric_str = 'Size Accuracy/{}'.format(self.log_text_plot)
+            if self.plot_density_on_weblogger == 1:
+                wandb.log({metric_str: plt})
+            if self.plot_density_on_weblogger == 2:
+                neptune.log_image(metric_str, fig)
             plt.close()
 
             # Plot Rotation Accuracy
+            fig, ax = plt.subplots(1, 1)
             mean_accuracy_rotation = data_frame.groupby(['rotation']).mean()['is_correct']  # generally size_X = size_Y so for now we don't bother with both
             x = mean_accuracy_rotation.index.get_level_values('rotation')
             plt.plot(x, mean_accuracy_rotation * 100, 'o-')
@@ -827,7 +849,13 @@ class ComputeDataframe(Callback):
             plt.ylabel('Mean Accuracy (%)')
             plt.title('rotation-accuracy')
             print(f'Mean Accuracy Rotation: {mean_accuracy_rotation} for rotation: {x}')
-            wandb.log({'{}/Rotation Accuracy'.format(self.log_text_plot): plt})
+            # wandb.log({'{}/Rotation Accuracy'.format(self.log_text_plot): plt})
+            metric_str = 'Rotation Accuracy/{}'.format(self.log_text_plot)
+            if self.plot_density_on_weblogger == 1:
+                wandb.log({metric_str: plt})
+            if self.plot_density_on_weblogger == 2:
+                neptune.log_image(metric_str, fig)
+            plt.close()
             plt.close()
 
         logs['dataframe'] = data_frame
@@ -848,11 +876,13 @@ class PlotGradientWeblog(Callback):
     grad = []
     layers = []
 
-    def __init__(self, net, log_every=50, plot_every=500, log_txt=''):
+    def __init__(self, net, log_every=50, plot_every=500, log_txt='', weblogger=1):
         self.log_every = log_every
         self.plot_every = plot_every
         self.log_txt = log_txt
         self.net = net
+        self.weblogger = weblogger
+
         super().__init__()
         for n, p in self.net.named_parameters():
             if p.requires_grad and ("bias" not in n):
@@ -878,52 +908,56 @@ class PlotGradientWeblog(Callback):
             plt.ylabel("average gradient")
             plt.title("Gradient flow iter{}".format(logs['tot_iter']))
             plt.grid(True)
-            # neptune.log_image('Gradient Plot [{}]'.format(self.log_txt), figure)
-            wandb.log({'Hidden Panels/Gradient Plot [{}]'.format(self.log_txt): wandb.Image(plt)})
+            metric_str = 'Hidden Panels/Gradient Plot [{}]'.format(self.log_txt)
+            if self.weblogger == 1:
+                wandb.log({metric_str: wandb.Image(plt)})
+            if self.weblogger == 2:
+                neptune.log_image(metric_str, figure)
 
             self.grad = []
             plt.close()
-
-class ComputeCosineSimilarity(Callback):
-    def __init__(self, net, dataset, type_cossim='translation', save_path=None, log_text_plot='cossim'):
-        # ToDo: for now always compute at the end but we can compute it at anytime changing detach_this_step
-        self.log_text_plot = log_text_plot
-        self.net = net
-        self.dataset = dataset
-        self.type_cossim = type_cossim
-        if self.type_cossim == 'translation':
-            self.cossim = CosSimTranslation(self.net, self.dataset)
-        elif self.type_cossim == 'resize':
-            self.cossim = CosSimResize(self.net, self.dataset)
-        elif self.type_cossim == 'rotate':
-            self.cossim = CosSimRotate(self.net, self.dataset)
-        else:
-            assert False, 'Type Cosine Similarity not Implemented'
-        self.save_path = save_path
-
-        super().__init__()
-
-    @staticmethod
-    def get_mean_std(cy, layer_name):
-        cy = np.array([cy[y][layer_name] for y in cy])
-        cymean = np.mean(cy, axis=0)
-        cystd = np.std(cy, axis=0)
-        return np.array(cymean), np.array(cystd)
-
-    def on_train_end(self, logs=None):
-        cossim, x_values = self.cossim.calculate_cossim_network()
-        penultimate_layer = list(cossim[0].keys())[-2]
-        m, s = self.get_mean_std(cossim, penultimate_layer)
-        # This could be moved to the appropriate cossim subclass if needed
-        plt.plot(x_values, m, 'o')
-        plt.fill_between(x_values, m - s, m + s, alpha=0.10)
-        plt.xlabel('Values')
-        plt.ylabel('Cosine Similarity')
-        wandb.log({'{}/Cosine Similarity [{}]'.format(self.log_text_plot, self.type_cossim): wandb.Image(plt)})
-        plt.close()
-
-        if self.save_path is not None:
-            pathlib.Path(os.path.dirname(self.save_path)).mkdir(parents=True, exist_ok=True)
+#
+# class ComputeCosineSimilarity(Callback):
+#     def __init__(self, net, dataset, type_cossim='translation', save_path=None, log_text_plot='cossim'):
+#         # ToDo: for now always compute at the end but we can compute it at anytime changing detach_this_step
+#         self.log_text_plot = log_text_plot
+#         self.net = net
+#         self.dataset = dataset
+#         self.type_cossim = type_cossim
+#         if self.type_cossim == 'translation':
+#             self.cossim = CosSimTranslation(self.net, self.dataset)
+#         elif self.type_cossim == 'resize':
+#             self.cossim = CosSimResize(self.net, self.dataset)
+#         elif self.type_cossim == 'rotate':
+#             self.cossim = CosSimRotate(self.net, self.dataset)
+#         else:
+#             assert False, 'Type Cosine Similarity not Implemented'
+#         self.save_path = save_path
+#
+#         super().__init__()
+#
+#     @staticmethod
+#     def get_mean_std(cy, layer_name):
+#         cy = np.array([cy[y][layer_name] for y in cy])
+#         cymean = np.mean(cy, axis=0)
+#         cystd = np.std(cy, axis=0)
+#         return np.array(cymean), np.array(cystd)
+#
+#     def on_train_end(self, logs=None):
+#         cossim, x_values = self.cossim.calculate_cossim_network()
+#         penultimate_layer = list(cossim[0].keys())[-2]
+#         m, s = self.get_mean_std(cossim, penultimate_layer)
+#         # This could be moved to the appropriate cossim subclass if needed
+#         plt.plot(x_values, m, 'o')
+#         plt.fill_between(x_values, m - s, m + s, alpha=0.10)
+#         plt.xlabel('Values')
+#         plt.ylabel('Cosine Similarity')
+#
+#         wandb.log({'{}/Cosine Similarity [{}]'.format(self.log_text_plot, self.type_cossim): wandb.Image(plt)})
+#         plt.close()
+#
+#         if self.save_path is not None:
+#             pathlib.Path(os.path.dirname(self.save_path)).mkdir(parents=True, exist_ok=True)
 
 
 

@@ -45,9 +45,9 @@ def parse_experiment_arguments(parser=None):
                         type=int,
                         default=0)
     parser.add_argument("-weblog", "--use_weblog",
-                        help="Log stuff to the weblogger (wandb, neptune, etc.)",
+                        help="Log stuff to the weblogger [0=none, 1=wandb, 2=neptune])",
                         type=int,
-                        default=1)
+                        default=2)
     parser.add_argument("-tags", "--additional_tags",
                         help="Add additional tags. Separate them by underscore. E.g. tag1_tag2",
                         type=str,
@@ -167,7 +167,7 @@ def parse_standard_training_arguments(parser=None):
 
     return parser
 
-def weblog_dataset_info(dataloader, log_text='', dataset_name=None):
+def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1):
     compute_my_generator_info = False
     if isinstance(dataloader.dataset, TranslateGenerator):
         dataset = dataloader.dataset
@@ -182,9 +182,12 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None):
         std = [0.2, 0.2, 0.2]
         Warning('MEAN, STD AND DATASET_NAME NOT SET FOR NEPTUNE LOGGING. This message is not referring to normalizing in PyTorch')
 
-    wandb.run.summary['{} mean'.format(dataset_name)] = mean
-    wandb.run.summary['{} std'.format(dataset_name)] = std
-
+    if weblogger == 1:
+        wandb.run.summary['Log: {} mean'.format(dataset_name)] = mean
+        wandb.run.summary['Log: {} std'.format(dataset_name)] = std
+    if weblogger == 2:
+        neptune.log_text('Log/{} mean'.format(dataset_name), str(mean))
+        neptune.log_text('Log/{} std'.format(dataset_name), str(std))
     size_object = dataset.size_object if dataset.size_object is not None else (0, 0)
 
     def draw_rect(canvas, range):
@@ -205,9 +208,11 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None):
                     canvas = draw_rect(canvas, r)
             else:
                 canvas = draw_rect(canvas, rangeC)
-            wandb.log({f'Debug/{log_text} AREA [{dataset_name}] ': [wandb.Image(canvas)]}, step=0)
-
-            # neptune.log_image('{} AREA, [{}] '.format(log_text, dataset_name, translation_type_str), canvas.astype(np.uint8))
+            metric_str = f'Debug/{log_text} AREA [{dataset_name}] '
+            if weblogger == 1:
+                wandb.log({metric_str: [wandb.Image(canvas)]}, step=0)
+            if weblogger == 2:
+                neptune.log_image(metric_str, canvas.astype(np.uint8))
             if break_after_one:
                 break
 
@@ -223,13 +228,16 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None):
             add_text = [''] * len(labels)
             if 'image_name' in list(more.keys()):
                 add_text = more['image_name']
-
-            wandb.log({'Debug/{} example images: [{}]'.format(log_text, dataset_name):
+            metric_str = 'Debug/{} example images: [{}]'.format(log_text, dataset_name)
+            if weblogger == 1:
+                wandb.log({metric_str:
                                [wandb.Image(convert_normalized_tensor_to_plottable_array(im, mean, std,
                                                                              text=f'{lb}' +
                                                                                   os.path.splitext(n)[0]).astype(np.uint8))
              for im, lb, n in zip(images, labels, add_text)]}, step=0)
-
+            if weblogger == 2:
+                [neptune.log_image(metric_str,
+                                   convert_normalized_tensor_to_plottable_array(im, mean, std, text=f'{lb}' + os.path.splitext(n)[0]).astype(np.uint8)) for im, lb, n in zip(images, labels, add_text)]
         except StopIteration:
             Warning('Iteration stopped when plotting [{}] on Neptune'.format(dataset_name))
 
