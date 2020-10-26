@@ -82,7 +82,7 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1)
 
     iterator = iter(dataloader)
     nc = dataloader.dataset.name_classes
-    for i in range(1):
+    for i in range(2):
         try:
             images, labels, more = next(iterator)
             images = images[0:np.max((4, len(images)))]

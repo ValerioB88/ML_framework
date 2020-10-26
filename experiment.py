@@ -801,7 +801,7 @@ class FewShotLearningExpUnity(FewShotLearningExp):
         parser.add_argument("-name_dataset_testing", "--name_dataset_testing",
                             help="Select the name of the dataset used for testing in Unity",
                             type=str,
-                            default="DatasetQuery")
+                            default=None)
         parser.add_argument("-sc", "--size_canvas",
                             help="Change the size of the image passed by Unity. Put 0 to avoid any resizing",
                             type=str,
@@ -811,6 +811,8 @@ class FewShotLearningExpUnity(FewShotLearningExp):
     def finalize_init(self, PARAMS, list_tags):
         self.name_dataset_training = PARAMS['name_dataset_training']
         self.name_dataset_testing = PARAMS['name_dataset_testing']
+        if self.name_dataset_testing is None:
+            self.name_dataset_testing = self.name_dataset_training
         self.size_canvas = PARAMS['size_canvas']
         list_tags.append("Unity")
         if self.size_canvas == '0':

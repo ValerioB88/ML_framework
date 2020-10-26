@@ -185,6 +185,7 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     else:
         model.eval()
     # framework_utils.imshow_batch(x)
+    assert len(x) == n_shot * k_way + k_way * q_queries
     y_onehot = torch.zeros(q_queries * k_way, k_way)
     y = torch.arange(0, k_way, 1 / q_queries)
     y_onehot = y_onehot.scatter(1, y.unsqueeze(-1).long(), 1)
@@ -211,12 +212,12 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         episode = torch.cat((summed_supp, q.expand(k_way, -1, -1, -1)), dim=1)
         batch = torch.cat((batch, make_cuda(episode, use_cuda)))
 
-    output = model.relation_net(batch).view((k_way, -1))
+    output = model.relation_net(batch).view((k_way, -1)).T
 
     loss = loss_fn(make_cuda(output, use_cuda),
                    make_cuda(y_onehot, use_cuda))
 
-    _, predicted = output.max(dim=0)
+    _, predicted = output.max(dim=1)
 
     selected_classes = y_real_labels[n_shot * k_way::q_queries]
     prediction_real_labels = selected_classes[predicted]
