@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from functools import partial
 from typing import Dict, List, Callable, Union
 from torch.nn.modules.loss import MSELoss, CrossEntropyLoss, NLLLoss
-
+from generate_datasets.generators.translate_generator import TranslateGenerator
 from callbacks import *
 import framework_utils as utils
 from models.meta_learning_models import MatchingNetwork, RelationNetSung, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
@@ -28,9 +28,12 @@ class Experiment(ABC):
         if torch.cuda.is_available():
             print('Using cuda - you are probably on the server')
             self.use_cuda = True
-        parser = utils.parse_experiment_arguments(parser)
+        if parser is None:
+            parser = argparse.ArgumentParser(allow_abbrev=False)
+        parser = self.parse_arguments(parser)
         PARAMS = vars(parser.parse_known_args()[0])
         self.net = None
+        self.size_canvas = (224, 224)
         self.current_run = -1
         # self.experiment_name = experiment_name
         self.num_runs = PARAMS['num_runs']  # this is not used here, and it shouldn't be here, but for now we are creating a weblogger session when an Experiment is created, and we want to save this as a parameter, so we need to do it here.
@@ -44,13 +47,11 @@ class Experiment(ABC):
         self.learning_rate = PARAMS['learning_rate']
         self.force_cuda = PARAMS['force_cuda']
         self.additional_tags = PARAMS['additional_tags']
-        self.size_object = PARAMS['size_object']
         self.weblogger = PARAMS['use_weblog']
         self.group_name = PARAMS['wandb_group_name']
         self.project_name = PARAMS['project_name']
         self.patience_stagnation = PARAMS['patience_stagnation']
         self.experiment_name = PARAMS['experiment_name']
-        self.size_object = None if self.size_object == '0' else self.size_object
         self.experiment_data = {}
         self.experiment_loaders = {}  # we separate data from loaders because loaders are pickled objects and may broke when module name changes. If this happens, at least we preserve the data. We generally don't even need the loaders much.
 
@@ -65,16 +66,74 @@ class Experiment(ABC):
         list_tags.append('ptImageNet') if self.pretraining == 'ImageNet' else None
         list_tags.append(self.network_name)
         list_tags.append('lr{}'.format("{:2f}".format(self.learning_rate).split(".")[1])) if self.learning_rate is not None else None
-        if self.size_object is not None:
-            self.size_object = tuple([int(i) for i in self.size_object.split("_")])
-            list_tags.append('so{}'.format(self.size_object).replace(', ','x')) if self.size_object != (50, 50) else None
-        else:
-            list_tags.append('orsize')
 
         if self.max_iterations is None:
             self.max_iterations = 5000 if self.use_cuda else 10
 
         self.finalize_init(PARAMS, list_tags)
+
+
+    def parse_arguments(self, parser):
+        parser.add_argument("-expname", "--experiment_name",
+                            help="Name of the experiment session, used as a name in the weblogger",
+                            type=str,
+                            default=None)
+        parser.add_argument("-r", "--num_runs",
+                            help="run experiment n times",
+                            type=int,
+                            default=1)
+        parser.add_argument("-fcuda", "--force_cuda",
+                            help="Force to run it with cuda enabled (for testing)",
+                            type=int,
+                            default=0)
+        parser.add_argument("-weblog", "--use_weblog",
+                            help="Log stuff to the weblogger [0=none, 1=wandb, 2=neptune])",
+                            type=int,
+                            default=2)
+        parser.add_argument("-tags", "--additional_tags",
+                            help="Add additional tags. Separate them by underscore. E.g. tag1_tag2",
+                            type=str,
+                            default=None)
+        parser.add_argument("-prjnm", "--project_name",
+                            type=str,
+                            default='TestProject')
+        parser.add_argument("-wbg", "--wandb_group_name",
+                            help="Group name for weight and biases, to organize sub experiments of a bigger project",
+                            type=str,
+                            default=None)
+        parser.add_argument("-pat1", "--patience_stagnation",
+                            help="Patience for early stopping for stagnation (num iter)",
+                            type=int,
+                            default=800)
+
+        parser.add_argument("-mo", "--model_output_filename",
+                            help="file name of the trained model",
+                            type=str,
+                            default=None)
+        parser.add_argument("-o", "--output_filename",
+                            help="output file name for the pandas dataframe files",
+                            type=str,
+                            default=None)
+        parser.add_argument("-nt", "--num_iterations_testing",
+                            default=300,
+                            type=int)
+        parser.add_argument("-lr", "--learning_rate",
+                            default=None, help='learning rate. If none the standard one will be chosen',
+                            type=float)
+        parser.add_argument("-sa", "--stop_when_train_acc_is",
+                            default=75, type=int)
+        parser.add_argument("-pt", "--pretraining",
+                            help="use [vanilla], [ImageNet (only for standard exp)] or a path",
+                            type=str,
+                            default='vanilla')
+        parser.add_argument("-mi", "--max_iterations",
+                            help="max number of batch iterations",
+                            type=int,
+                            default=None)
+        parser.add_argument("-n", "--network_name", help="[vgg11] [vgg11_bn] [vgg16] [vgg16_bn]",
+                            default=None,
+                            type=str)
+        return parser
 
     def new_run(self):
         self.current_run += 1
@@ -193,11 +252,10 @@ class Experiment(ABC):
                                     send_to_weblogger=self.weblogger,
                                     weblog_text=log_text),
                   ]
-        size_canvas = self.size_canvas if hasattr(self, 'size_canvas') else (224, 224)
         all_cb += ([ComputeDataframe(num_classes,
                                      self.use_cuda,
                                      translation_type_str,
-                                     self.network_name, size_canvas,
+                                     self.network_name, self.size_canvas,
                                      log_density_weblog=True if self.weblogger else False, log_text_plot=log_text)]
                    if save_dataframe else [])
         return all_cb
@@ -214,8 +272,8 @@ class Experiment(ABC):
         print('*TESTS')
         df_testing = pd.DataFrame([])
         for idx, testing_loader in enumerate(test_loaders_list):
-            print('Testing on [{}], [{}]'.format(testing_loader.dataset.name_generator, testing_loader.dataset.translation_type_str))
-            all_cb = self.prepare_test_callbacks(self._get_num_classes(testing_loader), log_text[idx] if log_text is not None else '', testing_loader.dataset.translation_type_str, save_dataframe)
+            print('Testing on [{}], [{}]'.format(testing_loader.dataset.name_generator, testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no translation'))
+            all_cb = self.prepare_test_callbacks(self._get_num_classes(testing_loader), log_text[idx] if log_text is not None else '', testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no transl', save_dataframe)
             all_cb += (callbacks or [])
 
             net, logs = self.call_run(testing_loader,
@@ -255,15 +313,54 @@ class TypeNet(Enum):
 
 
 class StandardTrainingExperiment(Experiment):
-    def __init__(self, experiment_class_name='', parser=None):
-        parser = utils.parse_standard_training_arguments(parser)
+    def __init__(self, **kwargs):
         self.use_gap, self.feature_extraction, self.big_canvas, self.shallow_FC = False, False, False, False
         self.size_canvas = None
         self.batch_size = None
         self.scramble_fc = None
         self.scramble_conv = None
         self.freeze_fc = None
-        super().__init__(experiment_class_name=experiment_class_name, parser=parser)
+        self.size_object = None
+        super().__init__(**kwargs)
+
+    def parse_arguments(self, parser):
+        super().parse_arguments(parser)
+        parser.add_argument("-sFC", "--shallow_FC",
+                            help='use a shallow fully connected layer (only a connection x to num_classes)',
+                            default=0, type=int)
+        parser.add_argument("-gap", "--use_gap",
+                            help="use GAP layer at the end of the convolutional layers",
+                            type=int,
+                            default=0)
+        parser.add_argument("-so", "--size_object",
+                            help="Change the size of the object. W_H (x, y). Set to 0 if you don't want to resize the object",
+                            type=str,
+                            default='50_50')
+        parser.add_argument("-f", "--feature_extraction",
+                            help="freeze the feature (conv) layers part of the VGG net",
+                            type=int,
+                            default=0)
+        parser.add_argument("-bC", "--big_canvas",
+                            help="If true, will use 400x400 canvas (otherwise 224x224). The VGG network will be changed accordingly (we won't use the adaptive GAP)",
+                            type=int,
+                            default=0)
+        parser.add_argument("-batch", "--batch_size",
+                            help="batch_size",
+                            type=int,
+                            default=32)
+        parser.add_argument("-freeze_fc", "--freeze_fc",
+                            help="Freeze the fully connected layer",
+                            type=int,
+                            default=0)
+        parser.add_argument("-scramble_fc", "--scramble_fc",
+                            help="When using a pretrain network, do not copy the fc weights",
+                            type=int,
+                            default=0)
+        parser.add_argument("-scramble_conv", "--scramble_conv",
+                            help="When using a pretrain network, do not copy the conv weights",
+                            type=int,
+                            default=0)
+        return parser
 
     def finalize_init(self, PARAMS, list_tags):
         self.use_gap = PARAMS['use_gap']
@@ -278,6 +375,14 @@ class StandardTrainingExperiment(Experiment):
         if not self.use_cuda:
             print(f'Not using cuda. Batch size changed from {self.batch_size} to 4')
             self.batch_size = 4
+        self.size_object = PARAMS['size_object']
+        self.size_object = None if self.size_object == '0' else self.size_object
+        if self.size_object is not None:
+            self.size_object = tuple([int(i) for i in self.size_object.split("_")])
+            list_tags.append('so{}'.format(self.size_object).replace(', ', 'x')) if self.size_object != (50, 50) else None
+        else:
+            list_tags.append('orsize')
+
         list_tags.append('gap') if self.use_gap else None
         list_tags.append('fe') if self.feature_extraction else None
         list_tags.append('bC') if self.big_canvas else None
@@ -559,33 +664,45 @@ class StandardTrainingExperiment(Experiment):
         return network, params_to_update
 
 
+
 class FewShotLearningExp(Experiment):
-    '''
+    """
     Select network_name = 'matching_net_basics' for using the basic network that works for any image size, used in the paper for Omniglot.
                         'matching_net_more' to use a more complex version of the matching net, with more conv layer. It can still accept any type of input
                         'matching_net_plus' the decision is made by an evaluation network. It accepts 128x128px images.
                         #ToDo: with a adaptive average pool make it accept whatever size
-    '''
+    """
 
     def __init__(self, experiment_class_name):
-        parser = argparse.ArgumentParser(allow_abbrev=False)
-        parser = utils.parse_few_shot_learning_parameters(parser)
         self.training_folder = None
         self.testing_folder = None
-        self.n, self.k, self.q, self.size_canvas = 0, 0, 0, 0
+        self.n, self.k, self.q = 0, 0, 0
         self.step = None
         self.lossfn = None
-        super().__init__(experiment_class_name=experiment_class_name, parser=parser)
+        super().__init__(experiment_class_name=experiment_class_name)
+
+    def parse_arguments(self, parser):
+        super().parse_arguments(parser)
+        parser.add_argument("-n_shot", "--n_shot",
+                            help="images for each classes for meta-training.",
+                            type=int,
+                            default=2)
+        parser.add_argument("-k_way", "--k_way",
+                            help="number of classes for meta-training",
+                            type=int,
+                            default=5)
+        parser.add_argument("-q_query", "--q_queries",
+                            help="number of query for each class for meta-training.",
+                            type=int,
+                            default=1)
+
+        return parser
 
     def finalize_init(self, PARAMS, list_tags):
-        self.training_folder = PARAMS['folder_for_training']
-        self.testing_folder = PARAMS['folder_for_testing']
         self.n = PARAMS['n_shot']
         self.k = PARAMS['k_way']
         self.q = PARAMS['q_queries']
-        self.size_canvas = PARAMS['size_canvas']
         list_tags.append(f'{self.k}w_{self.n}s_{self.q}q')
-        list_tags.append(f'sc{self.size_canvas}'.replace(', ', 'x'))
         print('LIST TAGS:')
         print(list_tags)
         super().finalize_init(PARAMS, list_tags)
@@ -628,10 +745,6 @@ class FewShotLearningExp(Experiment):
         return net, net.parameters()
 
     def call_run(self, data_loader, params_to_update, callbacks=None, train=True, epochs=20):
-        if data_loader.dataset.num_classes < self.k:
-            warnings.warn(f'Experiment: Number of classes in the folder {data_loader.dataset.folder} < k ({self.k}. K will be changed to {data_loader.dataset.num_classes}')
-            self.k = data_loader.dataset.num_classes
-
         return run(data_loader, use_cuda=self.use_cuda, net=self.net,
                    callbacks=callbacks,
                    loss_fn=utils.make_cuda(self.lossfn, self.use_cuda),
@@ -671,3 +784,89 @@ class FewShotLearningExp(Experiment):
                                                    reset_every=None)
 
         return all_cb
+
+
+class FewShotLearningExpUnity(FewShotLearningExp):
+    def __init__(self, **kwargs):
+        self.name_dataset_training = None
+        self.size_canvas = None
+        super().__init__(**kwargs)
+
+    def parse_arguments(self, parser):
+        super().parse_arguments(parser)
+        parser.add_argument("-name_dataset_training", "--name_dataset_training",
+                            help="Select the name of the dataset used for training in Unity",
+                            type=str,
+                            default="DatasetSupport")
+        parser.add_argument("-name_dataset_testing", "--name_dataset_testing",
+                            help="Select the name of the dataset used for testing in Unity",
+                            type=str,
+                            default="DatasetQuery")
+        parser.add_argument("-sc", "--size_canvas",
+                            help="Change the size of the image passed by Unity. Put 0 to avoid any resizing",
+                            type=str,
+                            default='0')
+        return parser
+
+    def finalize_init(self, PARAMS, list_tags):
+        self.name_dataset_training = PARAMS['name_dataset_training']
+        self.name_dataset_testing = PARAMS['name_dataset_testing']
+        self.size_canvas = PARAMS['size_canvas']
+        list_tags.append("Unity")
+        if self.size_canvas == '0':
+            self.size_canvas = None
+            # just for now
+            self.size_canvas = (64, 64)
+        else:
+            self.size_canvas = tuple([int(i) for i in self.size_canvas.split("_")])
+        list_tags.append('orsize' if self.size_canvas is '0' else 'sc{}'.format(str(self.size_canvas).replace(', ', 'x')))
+        super().finalize_init(PARAMS, list_tags)
+
+
+class FewShotLearningExpFolder(FewShotLearningExp):
+    def __init__(self, **kwargs):
+        self.trainin_folder = None
+        self.testing_folder = None
+        self.size_object = None
+        super().__init__(**kwargs)
+
+    def parse_arguments(self, parser):
+        super().parse_arguments(parser)
+        parser.add_argument("-trainf", "--folder_for_training",
+                            help="Select the folder for training this network.",
+                            type=str,
+                            default=None)
+        parser.add_argument("-testf", "--folder_for_testing",
+                            help="Select the folder(s) for testing this network.",
+                            type=str,
+                            nargs='+',
+                            default=None)
+        parser.add_argument("-sc", "--size_canvas",
+                            help="Change the size of the canvas. Canvas can be smaller than object (object will be cropped). "
+                                 "Use only for purely convolutional networks will not support this (the FC layer needs to be specified",
+                            type=lambda x: tuple([int(i) for i in x.split("_")]),
+                            default='224_224')
+        parser.add_argument("-so", "--size_object",
+                            help="Change the size of the object. W_H (x, y). Set to 0 if you don't want to resize the object",
+                            type=str,
+                            default='50_50')
+        return parser
+
+    def finalize_init(self, PARAMS, list_tags):
+        self.training_folder = PARAMS['folder_for_training']
+        self.testing_folder = PARAMS['folder_for_testing']
+        self.size_canvas = PARAMS['size_canvas']
+        self.size_object = PARAMS['size_object']
+        self.size_object = None if self.size_object == '0' else self.size_object
+        if self.size_object is not None:
+            self.size_object = tuple([int(i) for i in self.size_object.split("_")])
+            list_tags.append('so{}'.format(self.size_object).replace(', ', 'x')) if self.size_object != (50, 50) else None
+        else:
+            list_tags.append('orsize')
+        super().finalize_init(PARAMS, list_tags)
+
+    def call_run(self, data_loader, params_to_update, callbacks=None, train=True, epochs=20):
+        if data_loader.dataset.num_classes < self.k:
+            warnings.warn(f'Experiment: Number of classes in the folder {data_loader.dataset.folder} < k ({self.k}. K will be changed to {data_loader.dataset.num_classes}')
+            self.k = data_loader.dataset.num_classes
+        super().call_run(data_loader, params_to_update, callbacks=callbacks, train=train, epochs=epochs)
