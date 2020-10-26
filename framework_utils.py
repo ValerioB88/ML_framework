@@ -12,6 +12,7 @@ from matplotlib.patches import Rectangle
 from scipy import interpolate
 
 from generate_datasets.generators.translate_generator import TranslateGenerator
+from generate_datasets.generators.input_image_generator import InputImagesGenerator
 import wandb
 
 desired_width = 320
@@ -29,149 +30,10 @@ def remap_value(x, range_source, range_target):
     return range_target[0] + (x - range_source[0]) * (range_target[1] - range_target[0]) / (range_source[1] - range_source[0])
 
 
-def parse_experiment_arguments(parser=None):
-    if parser is None:
-        parser = argparse.ArgumentParser(allow_abbrev=False)
-    parser.add_argument("-expname", "--experiment_name",
-                        help="Name of the experiment session, used as a name in the weblogger",
-                        type=str,
-                        default=None)
-    parser.add_argument("-r", "--num_runs",
-                        help="run experiment n times",
-                        type=int,
-                        default=1)
-    parser.add_argument("-fcuda", "--force_cuda",
-                        help="Force to run it with cuda enabled (for testing)",
-                        type=int,
-                        default=0)
-    parser.add_argument("-weblog", "--use_weblog",
-                        help="Log stuff to the weblogger [0=none, 1=wandb, 2=neptune])",
-                        type=int,
-                        default=2)
-    parser.add_argument("-tags", "--additional_tags",
-                        help="Add additional tags. Separate them by underscore. E.g. tag1_tag2",
-                        type=str,
-                        default=None)
-    parser.add_argument("-prjnm", "--project_name",
-                        type=str,
-                        default='TestProject')
-    parser.add_argument("-wbg", "--wandb_group_name",
-                        help="Group name for weight and biases, to organize sub experiments of a bigger project",
-                        type=str,
-                        default=None)
-    parser.add_argument("-pat1", "--patience_stagnation",
-                        help="Patience for early stopping for stagnation (num iter)",
-                        type=int,
-                        default=800)
-    parser.add_argument("-so", "--size_object",
-                        help="Change the size of the object. W_H (x, y). Set to 0 if you don't want to resize the object",
-                        type=str,
-                        default='50_50')
-    parser.add_argument("-mo", "--model_output_filename",
-                        help="file name of the trained model",
-                        type=str,
-                        default=None)
-    parser.add_argument("-o", "--output_filename",
-                        help="output file name for the pandas dataframe files",
-                        type=str,
-                        default=None)
-    parser.add_argument("-nt", "--num_iterations_testing",
-                        default=300,
-                        type=int)
-    parser.add_argument("-lr", "--learning_rate",
-                        default=None, help='learning rate. If none the standard one will be chosen',
-                        type=float)
-    parser.add_argument("-sa", "--stop_when_train_acc_is",
-                        default=75, type=int)
-    parser.add_argument("-pt", "--pretraining",
-                        help="use [vanilla], [ImageNet (only for standard exp)] or a path",
-                        type=str,
-                        default='vanilla')
-    parser.add_argument("-mi", "--max_iterations",
-                        help="max number of batch iterations",
-                        type=int,
-                        default=None)
-    parser.add_argument("-n", "--network_name", help="[vgg11] [vgg11_bn] [vgg16] [vgg16_bn]",
-                        default=None,
-                        type=str)
-    return parser
-
-
-def parse_few_shot_learning_parameters(parser=None):
-    if parser is None:
-        parser = argparse.ArgumentParser(allow_abbrev=False)
-
-    parser.add_argument("-trainf", "--folder_for_training",
-                        help="Select the folder for training this network.",
-                        type=str,
-                        default=None)
-    parser.add_argument("-testf", "--folder_for_testing",
-                        help="Select the folder(s) for testing this network.",
-                        type=str,
-                        nargs='+',
-                        default=None)
-    parser.add_argument("-n_shot", "--n_shot",
-                        help="images for each classes for meta-training.",
-                        type=int,
-                        default=2)
-    parser.add_argument("-k_way", "--k_way",
-                        help="number of classes for meta-training",
-                        type=int,
-                        default=5)
-    parser.add_argument("-q_query", "--q_queries",
-                        help="number of query for each class for meta-training.",
-                        type=int,
-                        default=1)
-    parser.add_argument("-sc", "--size_canvas",
-                        help="Change the size of the canvas. Canvas can be smaller than object (object will be cropped). "
-                             "Use only for purely convolutional networks will not support this (the FC layer needs to be specified",
-                        type=lambda x: tuple([int(i) for i in x.split("_")]),
-                        default='224_224')
-    return parser
-
-def parse_standard_training_arguments(parser=None):
-    if parser is None:
-        parser = argparse.ArgumentParser(allow_abbrev=False)
-
-    parser.add_argument("-sFC", "--shallow_FC",
-                        help='use a shallow fully connected layer (only a connection x to num_classes)',
-                        default=0, type=int)
-    parser.add_argument("-gap", "--use_gap",
-                        help="use GAP layer at the end of the convolutional layers",
-                        type=int,
-                        default=0)
-    parser.add_argument("-f", "--feature_extraction",
-                        help="freeze the feature (conv) layers part of the VGG net",
-                        type=int,
-                        default=0)
-    parser.add_argument("-bC", "--big_canvas",
-                        help="If true, will use 400x400 canvas (otherwise 224x224). The VGG network will be changed accordingly (we won't use the adaptive GAP)",
-                        type=int,
-                        default=0)
-    parser.add_argument("-batch", "--batch_size",
-                        help="batch_size",
-                        type=int,
-                        default=32)
-    parser.add_argument("-freeze_fc", "--freeze_fc",
-                        help="Freeze the fully connected layer",
-                        type=int,
-                        default=0)
-    parser.add_argument("-scramble_fc", "--scramble_fc",
-                        help="When using a pretrain network, do not copy the fc weights",
-                        type=int,
-                        default=0)
-    parser.add_argument("-scramble_conv", "--scramble_conv",
-                        help="When using a pretrain network, do not copy the conv weights",
-                        type=int,
-                        default=0)
-
-    return parser
-
 def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1):
     compute_my_generator_info = False
-    if isinstance(dataloader.dataset, TranslateGenerator):
+    if isinstance(dataloader.dataset, InputImagesGenerator):
         dataset = dataloader.dataset
-        translation_type_str = dataset.translation_type_str
         compute_my_generator_info = True
         dataset_name = dataset.name_generator
         mean = dataloader.dataset.stats['mean']
@@ -188,33 +50,35 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1)
     if weblogger == 2:
         neptune.log_text('Log/{} mean'.format(dataset_name), str(mean))
         neptune.log_text('Log/{} std'.format(dataset_name), str(std))
-    size_object = dataset.size_object if dataset.size_object is not None else (0, 0)
+    if isinstance(dataset, TranslateGenerator):
 
-    def draw_rect(canvas, range):
-        canvas = cv2.rectangle(canvas, (range[0], range[2]),
-                                       (range[1] - 1, range[3] - 1), (0, 0, 255), 2)
-        canvas = cv2.rectangle(canvas, (range[0] - size_object[0] // 2, range[2] - size_object[0] // 2),
-                                       (range[1] + size_object[1] // 2 - 1, range[3] + size_object[1] // 2 - 1), (0, 0, 240), 2)
-        return canvas
+        size_object = dataset.size_object if dataset.size_object is not None else (0, 0)
 
-    break_after_one = False
-    if compute_my_generator_info:
-        if all(value == list(dataset.translations_range.values())[0] for value in dataset.translations_range.values()):
-            break_after_one = True
-        for groupID, rangeC in dataset.translations_range.items():
-            canvas = np.zeros(dataset.size_canvas) + 254
-            if isinstance(rangeC[0], tuple):
-                for r in rangeC:
-                    canvas = draw_rect(canvas, r)
-            else:
-                canvas = draw_rect(canvas, rangeC)
-            metric_str = f'Debug/{log_text} AREA [{dataset_name}] '
-            if weblogger == 1:
-                wandb.log({metric_str: [wandb.Image(canvas)]}, step=0)
-            if weblogger == 2:
-                neptune.log_image(metric_str, canvas.astype(np.uint8))
-            if break_after_one:
-                break
+        def draw_rect(canvas, range):
+            canvas = cv2.rectangle(canvas, (range[0], range[2]),
+                                           (range[1] - 1, range[3] - 1), (0, 0, 255), 2)
+            canvas = cv2.rectangle(canvas, (range[0] - size_object[0] // 2, range[2] - size_object[0] // 2),
+                                           (range[1] + size_object[1] // 2 - 1, range[3] + size_object[1] // 2 - 1), (0, 0, 240), 2)
+            return canvas
+
+        break_after_one = False
+        if compute_my_generator_info:
+            if all(value == list(dataset.translations_range.values())[0] for value in dataset.translations_range.values()):
+                break_after_one = True
+            for groupID, rangeC in dataset.translations_range.items():
+                canvas = np.zeros(dataset.size_canvas) + 254
+                if isinstance(rangeC[0], tuple):
+                    for r in rangeC:
+                        canvas = draw_rect(canvas, r)
+                else:
+                    canvas = draw_rect(canvas, rangeC)
+                metric_str = f'Debug/{log_text} AREA [{dataset_name}] '
+                if weblogger == 1:
+                    wandb.log({metric_str: [wandb.Image(canvas)]}, step=0)
+                if weblogger == 2:
+                    neptune.log_image(metric_str, canvas.astype(np.uint8))
+                if break_after_one:
+                    break
 
     iterator = iter(dataloader)
     nc = dataloader.dataset.name_classes
