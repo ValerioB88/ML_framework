@@ -474,9 +474,10 @@ class StopFromUserInput(Callback):
             print('Stopping from user input')
 
 
-class EarlyStopping(Callback):
-    def __init__(self, mode='min', min_delta=0, patience=10, percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100):
+class TriggerActionWithPatience(Callback):
+    def __init__(self, mode='min', min_delta=0, patience=10, percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100, triggered_action=None):
         super().__init__()
+        self.triggered_action = triggered_action
         self.mode = mode  # mode refers to what are you trying to reach.
         self.check_every = check_every
         self.min_delta = min_delta
@@ -523,8 +524,9 @@ class EarlyStopping(Callback):
                     self.num_bad_epochs += 1
 
             if self.num_bad_epochs >= self.patience:
-                logs['stop'] = True
-                print(f'Early Stopping: {self.string}')
+                self.triggered_action(logs, self)
+                # needs to reset itself
+                self.num_bad_epochs = 0
 
     def _init_is_better(self, mode, min_delta, percentage):
         if mode not in {'min', 'max'}:
@@ -571,10 +573,9 @@ class SaveModel(Callback):
 
 
 class Metrics(Callback):
-    def __init__(self, use_cuda, log_every, weblogger=1, log_text=''):
+    def __init__(self, use_cuda, log_every, log_text=''):
         self.use_cuda = use_cuda
         self.log_every = log_every
-        self.to_weblogger = weblogger
         self.log_text = log_text
         self.correct_train, self.total_samples = 0, 0
         super().__init__()
@@ -586,8 +587,8 @@ class Metrics(Callback):
 
 
 class RunningMetrics(Metrics):
-    def __init__(self, use_cuda, log_every, weblogger=1, log_text=''):
-        super().__init__(use_cuda, log_every, weblogger, log_text)
+    def __init__(self, use_cuda, log_every, log_text=''):
+        super().__init__(use_cuda, log_every, log_text)
         self.running_loss = 0
         self.init_classic_logs()
 
@@ -603,12 +604,30 @@ class RunningMetrics(Metrics):
     def init_classic_logs(self):
         self.correct_train, self.total_samples, self.running_loss = 0, 0, 0
 
+class AverageChangeMetric(RunningMetrics):
+    old_metric = None
+
+    def __init__(self, loss_or_acc='loss', **kwargs):
+        self.loss_or_acc = loss_or_acc
+        super().__init__(**kwargs)
+
+    def on_training_step_end(self, batch_index, logs=None):
+        self.update_classic_logs(logs)
+        if batch_index % self.log_every == self.log_every - 1:
+            metric = self.compute_mean_loss_acc()[0 if self.loss_or_acc == 'loss' else 1]
+            if self.old_metric is not None:
+                logs[{self.log_text}] = metric - self.old_metric
+            self.old_metric = metric
+
+            self.init_classic_logs()
 
 class StandardMetrics(RunningMetrics):
-    def __init__(self, log_every=5, print_it=True, use_cuda=True, weblogger=True, log_text='', metrics_prefix=''):
-        super().__init__(use_cuda, log_every, weblogger, log_text)
+    def __init__(self, print_it=True, metrics_prefix='', weblogger=2, **kwargs):
+        self.weblogger = weblogger
         self.print_it = print_it
         self.metrics_prefix = metrics_prefix
+        super().__init__(**kwargs)
+
 
     def on_training_step_end(self, batch_index, batch_logs=None):
         super().on_batch_end(batch_index, batch_logs)
@@ -619,10 +638,10 @@ class StandardMetrics(RunningMetrics):
                 print('[iter{}] loss: {}, train_acc: {}'.format(batch_logs['tot_iter'], batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
             metric1 = 'Metric/{}/ Mean Running Loss '.format(self.log_text)
             metric2 = 'Metric/{}/ Mean Train Accuracy train'.format(self.log_text)
-            if self.to_weblogger == 1:
+            if self.weblogger == 1:
                 wandb.log({metric1: batch_logs[f'{self.metrics_prefix}/mean_loss'],
                            metric2: batch_logs[f'{self.metrics_prefix}/mean_acc']})
-            if self.to_weblogger == 2:
+            if self.weblogger == 2:
                 neptune.send_metric(metric1, batch_logs[f'{self.metrics_prefix}/mean_loss'])
                 neptune.send_metric(metric2, batch_logs[f'{self.metrics_prefix}/mean_acc'])
             self.init_classic_logs()
@@ -630,7 +649,8 @@ class StandardMetrics(RunningMetrics):
 
 class TotalAccuracyMetric(Metrics):
     def __init__(self, use_cuda, to_weblog=True, log_text=''):
-        super().__init__(use_cuda, log_every=None, weblogger=to_weblog, log_text=log_text)
+        super().__init__(use_cuda, log_every=None, log_text=log_text)
+        self.to_weblogger = to_weblog
 
     def on_training_step_end(self, batch_index, batch_logs=None):
         super().on_training_step_end(batch_index, batch_logs)
@@ -668,8 +688,8 @@ class ComputeConfMatrix(Callback):
         logs['conf_mat_acc'] = (self.confusion_matrix / self.confusion_matrix.sum(1)[:, None]).numpy()
 
         if self.send_to_weblogger:
-            figure = plt.figure(figsize=(10, 7))
-            sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".1f", annot_kws={"size": 16})  # font size
+            figure = plt.figure(figsize=(20, 15))
+            sn.heatmap(cf, annot=True, fmt=".1f", annot_kws={"size": 15})  # font size
             plt.ylabel('truth')
             plt.xlabel('predicted')
             plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter))

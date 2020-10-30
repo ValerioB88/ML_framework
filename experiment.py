@@ -18,7 +18,7 @@ from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
 import time
 import wandb
-
+from generate_datasets.generators.unity_metalearning_generator import UnityGenMetaLearning
 
 # from wandb import magic
 
@@ -55,6 +55,8 @@ class Experiment(ABC):
         self.experiment_data = {}
         self.experiment_loaders = {}  # we separate data from loaders because loaders are pickled objects and may broke when module name changes. If this happens, at least we preserve the data. We generally don't even need the loaders much.
 
+        self.weblog_check_every = 5
+        self.console_check_every = 100
         if self.force_cuda:
             self.use_cuda = True
 
@@ -178,24 +180,28 @@ class Experiment(ABC):
     def get_net(self, network_name, num_classes, pretraining, grayscale):
         return None, None
 
-    def prepare_train_callbacks(self, log_text, num_classes):
-        nept_check_every = 5
-        console_check_every = 100
-        all_cb = [StandardMetrics(log_every=console_check_every, print_it=True,
+    def prepare_train_callbacks(self, log_text, train_loader):
+        num_classes = self._get_num_classes(train_loader)
+
+        def stop(logs, cb):
+            logs['stop'] = True
+            print('Early Stopping: {}'.format(cb.string))
+
+        all_cb = [StandardMetrics(log_every=self.console_check_every, print_it=True,
                                   use_cuda=self.use_cuda,
                                   weblogger=0, log_text=log_text,
                                   metrics_prefix='cnsl'),
-                  EarlyStopping(min_delta=0.01, patience=800, percentage=True, mode='max',
-                                reaching_goal=self.stop_when_train_acc_is,
-                                metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
-                                check_every=nept_check_every if self.weblogger
-                                else console_check_every),  # once reached a certain accuracy
-                  EarlyStopping(min_delta=0.01, patience=self.patience_stagnation, percentage=True, mode='min',
-                                reaching_goal=None,
-                                metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
-                                check_every=nept_check_every if self.weblogger
-                                else console_check_every),  # for stagnation
-                  StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),
+                  TriggerActionWithPatience(min_delta=0.01, patience=800, percentage=True, mode='max',
+                                            reaching_goal=self.stop_when_train_acc_is,
+                                            metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
+                                            check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
+                                            triggered_action=stop),  # once reached a certain accuracy
+                  TriggerActionWithPatience(min_delta=0.01, patience=self.patience_stagnation, percentage=True, mode='min',
+                                            reaching_goal=None,
+                                            metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
+                                            check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
+                                            triggered_action=stop),  # for stagnation
+                  StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),  # you could use early stopping for that
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
                                       to_weblog=self.weblogger, log_text=log_text),
                   ComputeConfMatrix(num_classes=num_classes,
@@ -208,11 +214,11 @@ class Experiment(ABC):
 
         all_cb += ([SaveModel(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
         if self.weblogger:
-            all_cb += [StandardMetrics(log_every=nept_check_every, print_it=False,
+            all_cb += [StandardMetrics(log_every=self.weblog_check_every, print_it=False,
                                        use_cuda=self.use_cuda,
                                        weblogger=self.weblogger, log_text=log_text,
                                        metrics_prefix='webl'),
-                       RollingAccEachClassWeblog(log_every=nept_check_every,
+                       RollingAccEachClassWeblog(log_every=self.weblog_check_every,
                                                  num_classes=num_classes,
                                                  weblog_text=log_text,
                                                  weblogger=self.weblogger),
@@ -229,8 +235,8 @@ class Experiment(ABC):
         self.net, params_to_update = self.get_net(self.network_name,
                                                   num_classes=self._get_num_classes(train_loader),
                                                   pretraining=self.pretraining,
-                                                  grayscale=train_loader.dataset.grayscale)
-        all_cb = self.prepare_train_callbacks(log_text, self._get_num_classes(train_loader))
+                                                  grayscale=False)
+        all_cb = self.prepare_train_callbacks(log_text, train_loader)
 
         all_cb += (callbacks or [])
         # assert self._get_num_classes(train_loader) == self.net.classifier[-1].out_features, f"Net output size [{self.net.classifier[-1].out_features}] doesn't match number of classes [{self._get_num_classes(train_loader)}]"
@@ -681,6 +687,9 @@ class FewShotLearningExp(Experiment):
         self.lossfn = None
         super().__init__(experiment_class_name=experiment_class_name)
 
+    # def _get_num_classes(self, loader):
+    #     return self.k
+
     def parse_arguments(self, parser):
         super().parse_arguments(parser)
         parser.add_argument("-n_shot", "--n_shot",
@@ -740,6 +749,14 @@ class FewShotLearningExp(Experiment):
             net = RelationNetSung(size_canvas=self.size_canvas, n_shots=self.n)
             self.step = partial(relation_net_step, concatenate=True)
             self.lossfn = MSELoss()
+        else:
+            assert False, "Name network not recognized"
+
+        if pretraining is not 'vanilla':
+            if os.path.isfile(pretraining):
+                print(f"Pretraining value should be a path when used with FewShotLearning (not ImageNet, etc.). Instead is {pretraining}")
+            net.load_state_dict(pretraining)
+
         print('***Network***')
         print(net)
         return net, net.parameters()
@@ -753,11 +770,12 @@ class FewShotLearningExp(Experiment):
                    iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q},
                    epochs=epochs)
 
-    def prepare_train_callbacks(self, log_text, num_classes):
-        all_cb = super().prepare_train_callbacks(log_text, num_classes)
+    def prepare_train_callbacks(self, log_text, train_loader):
+        all_cb = super().prepare_train_callbacks(log_text, train_loader)
+
         idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
         assert len(idx_ccm) == 1
-        all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=num_classes,
+        all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=self._get_num_classes(train_loader),
                                                    weblogger=self.weblogger,
                                                    weblog_text=log_text,
                                                    reset_every=200)
@@ -790,16 +808,17 @@ class FewShotLearningExpUnity(FewShotLearningExp):
     def __init__(self, **kwargs):
         self.name_dataset_training = None
         self.size_canvas = None
+        self.play_mode = False
         super().__init__(**kwargs)
 
     def parse_arguments(self, parser):
         super().parse_arguments(parser)
         parser.add_argument("-name_dataset_training", "--name_dataset_training",
-                            help="Select the name of the dataset used for training in Unity",
+                            help="Select the name of the dataset used for training in Unity - set None for running play mode (and if you do, no testing will be done)",
                             type=str,
-                            default="DatasetSupport")
+                            default=None)
         parser.add_argument("-name_dataset_testing", "--name_dataset_testing",
-                            help="Select the name of the dataset used for testing in Unity",
+                            help="Select the name of the dataset used for testing in Unity. It can be more than one. Separate them with _",
                             type=str,
                             default=None)
         parser.add_argument("-sc", "--size_canvas",
@@ -810,9 +829,13 @@ class FewShotLearningExpUnity(FewShotLearningExp):
 
     def finalize_init(self, PARAMS, list_tags):
         self.name_dataset_training = PARAMS['name_dataset_training']
-        self.name_dataset_testing = PARAMS['name_dataset_testing']
-        if self.name_dataset_testing is None:
-            self.name_dataset_testing = self.name_dataset_training
+        self.name_datasets_testing = PARAMS['name_dataset_testing']
+        if self.name_datasets_testing is None and self.name_dataset_training is None:
+            self.play_mode = True
+        else:
+            if self.name_datasets_testing is None and self.name_dataset_training is not None:
+                self.name_datasets_testing = self.name_dataset_training
+            self.name_datasets_testing = str.split(self.name_datasets_testing, "_")
         self.size_canvas = PARAMS['size_canvas']
         list_tags.append("Unity")
         if self.size_canvas == '0':
@@ -824,6 +847,27 @@ class FewShotLearningExpUnity(FewShotLearningExp):
         list_tags.append('orsize' if self.size_canvas is '0' else 'sc{}'.format(str(self.size_canvas).replace(', ', 'x')))
         super().finalize_init(PARAMS, list_tags)
 
+    def prepare_train_callbacks(self, log_text, train_loader):
+        class CheckStoppingLevel:
+            there_is_another_level = True
+
+            def go_next_level(self, logs, *args, **kwargs):
+                if self.there_is_another_level:
+                    self.there_is_another_level = train_loader.dataset.sampler.env_params.next_level()
+                    framework_utils.weblog_dataset_info(train_loader, f'Increase {train_loader.dataset.sampler.env_params.count_increase}', weblogger=2)  # the idea is that after reaching the end level, we wait another stagnation
+                else:
+                    print("No new level, reached maximum")
+                    logs['stop'] = True
+
+        # AverageChangeMetric(loss_or_acc='acc',  use_cuda=self.use_cuda, log_every=nept_check_every, log_text='avrgChange/acc'),
+        all_cb = super().prepare_train_callbacks(log_text, train_loader)
+        ck = CheckStoppingLevel()
+        all_cb += [TriggerActionWithPatience(min_delta=0.01, patience=400, percentage=True, mode='max',
+                                             reaching_goal=80,
+                                             metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
+                                             check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
+                                             triggered_action=ck.go_next_level)]
+        return all_cb
 
 class FewShotLearningExpFolder(FewShotLearningExp):
     def __init__(self, **kwargs):
