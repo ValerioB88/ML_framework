@@ -689,11 +689,11 @@ class ComputeConfMatrix(Callback):
 
         if self.send_to_weblogger:
             figure = plt.figure(figsize=(20, 15))
-            sn.heatmap(cf, annot=True, fmt=".1f", annot_kws={"size": 15})  # font size
+            sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".1f", annot_kws={"size": 15})  # font size
             plt.ylabel('truth')
             plt.xlabel('predicted')
-            plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter))
-            metric_str = 'Confusion Matrix/{}'.format(self.log_text_plot)
+            plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter), size=22)
+            metric_str = 'Confusion Matrix' # {}'.format(self.log_text_plot)
             if self.weblogger == 1:
                 wandb.log({metric_str: wandb.Image(plt)})
             if self.weblogger == 2:
