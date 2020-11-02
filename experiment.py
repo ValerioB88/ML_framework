@@ -866,7 +866,7 @@ class FewShotLearningExpUnity(FewShotLearningExp):
         # AverageChangeMetric(loss_or_acc='acc',  use_cuda=self.use_cuda, log_every=nept_check_every, log_text='avrgChange/acc'),
         all_cb = super().prepare_train_callbacks(log_text, train_loader)
         ck = CheckStoppingLevel()
-        all_cb += [TriggerActionWithPatience(min_delta=0.01, patience=400, percentage=True, mode='max',
+        all_cb += [TriggerActionWithPatience(min_delta=0.01, patience=800, percentage=True, mode='max',
                                              reaching_goal=80,
                                              metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
                                              check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
