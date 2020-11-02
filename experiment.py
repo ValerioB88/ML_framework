@@ -181,8 +181,6 @@ class Experiment(ABC):
         return None, None
 
     def prepare_train_callbacks(self, log_text, train_loader):
-        num_classes = self._get_num_classes(train_loader)
-
         def stop(logs, cb):
             logs['stop'] = True
             print('Early Stopping: {}'.format(cb.string))
@@ -202,12 +200,7 @@ class Experiment(ABC):
                                             check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
                                             triggered_action=stop),  # for stagnation
                   StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),  # you could use early stopping for that
-                  TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_weblog=self.weblogger, log_text=log_text),
-                  ComputeConfMatrix(num_classes=num_classes,
-                                    weblogger=self.weblogger,
-                                    weblog_text=log_text,
-                                    reset_every=200),
+
 
                   StopFromUserInput(),
                   PlotTimeElapsed(time_every=100)]
@@ -218,12 +211,8 @@ class Experiment(ABC):
                                        use_cuda=self.use_cuda,
                                        weblogger=self.weblogger, log_text=log_text,
                                        metrics_prefix='webl'),
-                       RollingAccEachClassWeblog(log_every=self.weblog_check_every,
-                                                 num_classes=num_classes,
-                                                 weblog_text=log_text,
-                                                 weblogger=self.weblogger),
-                       PlotGradientWeblog(net=self.net, log_every=50, plot_every=500, log_txt=log_text, weblogger=self.weblogger),
-                       ]
+
+                       PlotGradientWeblog(net=self.net, log_every=50, plot_every=500, log_txt=log_text, weblogger=self.weblogger)]
 
         return all_cb
 
@@ -251,19 +240,7 @@ class Experiment(ABC):
         self.experiment_data[self.current_run]['accuracy'] = accuracy
 
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
-        all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
-                  TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_weblog=self.weblogger, log_text=log_text),
-                  ComputeConfMatrix(num_classes=num_classes,
-                                    send_to_weblogger=self.weblogger,
-                                    weblog_text=log_text),
-                  ]
-        all_cb += ([ComputeDataframe(num_classes,
-                                     self.use_cuda,
-                                     translation_type_str,
-                                     self.network_name, self.size_canvas,
-                                     log_density_weblog=True if self.weblogger else False, log_text_plot=log_text)]
-                   if save_dataframe else [])
+        all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter')]
         return all_cb
 
     def test(self, net, test_loaders_list, callbacks=None, log_text: List[str] = None):
@@ -318,7 +295,7 @@ class TypeNet(Enum):
     OTHER = 4
 
 
-class StandardTrainingExperiment(Experiment):
+class SupervisedLearningExperiment(Experiment):
     def __init__(self, **kwargs):
         self.use_gap, self.feature_extraction, self.big_canvas, self.shallow_FC = False, False, False, False
         self.size_canvas = None
@@ -669,7 +646,37 @@ class StandardTrainingExperiment(Experiment):
             print(network)
         return network, params_to_update
 
+    def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
+        all_cb = [TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                      to_weblog=self.weblogger, log_text=log_text),
+                  ComputeConfMatrix(num_classes=num_classes,
+                                    send_to_weblogger=self.weblogger,
+                                    weblog_text=log_text)]
+        all_cb += ([ComputeDataframe(num_classes,
+                                     self.use_cuda,
+                                     translation_type_str,
+                                     self.network_name, self.size_canvas,
+                                     log_density_weblog=True if self.weblogger else False, log_text_plot=log_text)]
+                   if save_dataframe else[])
+        return all_cb
 
+    def prepare_train_callbacks(self, log_text, train_loader):
+        num_classes = self._get_num_classes(train_loader)
+
+        all_cb = super().prepare_train_callbacks(log_text, train_loader)
+        all_cb += [TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                       to_weblog=self.weblogger, log_text=log_text),
+                   ComputeConfMatrix(num_classes=num_classes,
+                                     weblogger=self.weblogger,
+                                     weblog_text=log_text,
+                                     reset_every=200)]
+
+        if self.weblogger:
+            all_cb += [RollingAccEachClassWeblog(log_every=self.weblog_check_every,
+                                                 num_classes=num_classes,
+                                                 weblog_text=log_text,
+                                                 weblogger=self.weblogger)]
+        return all_cb
 
 class FewShotLearningExp(Experiment):
     """
@@ -772,34 +779,31 @@ class FewShotLearningExp(Experiment):
 
     def prepare_train_callbacks(self, log_text, train_loader):
         all_cb = super().prepare_train_callbacks(log_text, train_loader)
-
-        idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
-        assert len(idx_ccm) == 1
-        all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=self._get_num_classes(train_loader),
-                                                   weblogger=self.weblogger,
-                                                   weblog_text=log_text,
-                                                   reset_every=200)
+        all_cb += [CompConfMatrixFewShot(num_classes=self._get_num_classes(train_loader),
+                                         weblogger=self.weblogger,
+                                         weblog_text=log_text,
+                                         reset_every=200),
+                   TotalAccuractMetricFewShots(use_cuda=self.use_cuda,
+                                               to_weblog=self.weblogger, log_text=log_text)]
         return all_cb
 
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
         all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
         if save_dataframe:
-            idx_cd = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeDataframe)]
-            assert len(idx_cd) <= 1
-            all_cb[idx_cd[0]] = ComputeDataframe(self.k,
-                                                 self.use_cuda,
-                                                 translation_type_str,
-                                                 self.network_name, self.size_canvas,
-                                                 log_density_weblog=self.weblogger,
-                                                 log_text_plot=log_text,
-                                                 output_and_softmax=False)
+            all_cb += [ComputeDataframe(self.k,
+                                        self.use_cuda,
+                                        translation_type_str,
+                                        self.network_name, self.size_canvas,
+                                        log_density_weblog=self.weblogger,
+                                        log_text_plot=log_text,
+                                        output_and_softmax=False)]
 
-        idx_ccm = [idx for idx, i in enumerate(all_cb) if isinstance(i, ComputeConfMatrix)]
-        assert len(idx_ccm) == 1
-        all_cb[idx_ccm[0]] = CompConfMatrixFewShot(num_classes=num_classes,
-                                                   weblogger=self.weblogger,
-                                                   weblog_text=log_text,
-                                                   reset_every=None)
+        all_cb += [CompConfMatrixFewShot(num_classes=num_classes,
+                                         weblogger=self.weblogger,
+                                         weblog_text=log_text,
+                                         reset_every=None),
+                   TotalAccuractMetricFewShots(use_cuda=self.use_cuda,
+                                               to_weblog=self.weblogger, log_text=log_text)]
 
         return all_cb
 

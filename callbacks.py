@@ -586,6 +586,11 @@ class Metrics(Callback):
         self.total_samples += batch_logs['y_true'].size(0)
 
 
+    def update_classic_logs_few_shots(self, batch_logs):
+        self.correct_train += ((batch_logs['y_pred_real_lab'].cuda() if self.use_cuda else batch_logs['y_pred_real_lab']) ==
+                               (batch_logs['y_true_real_lab'].cuda() if self.use_cuda else batch_logs['y_true_real_lab'])).sum().item()
+        self.total_samples += batch_logs['y_true_real_lab'].size(0)
+
 class RunningMetrics(Metrics):
     def __init__(self, use_cuda, log_every, log_text=''):
         super().__init__(use_cuda, log_every, log_text)
@@ -665,6 +670,12 @@ class TotalAccuracyMetric(Metrics):
         if self.to_weblogger == 2:
             neptune.log_metric(metric_str, logs['total_accuracy'])
 
+
+class TotalAccuractMetricFewShots(TotalAccuracyMetric):
+    def on_training_step_end(self, batch_index, batch_logs=None):
+        self.update_classic_logs_few_shots(batch_logs)
+
+
 class ComputeConfMatrix(Callback):
     def __init__(self, num_classes, reset_every=None, send_to_weblogger=True, weblog_text='', weblogger=1):
         self.num_classes = num_classes
@@ -689,7 +700,7 @@ class ComputeConfMatrix(Callback):
 
         if self.send_to_weblogger:
             figure = plt.figure(figsize=(20, 15))
-            sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".1f", annot_kws={"size": 15})  # font size
+            sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".2f", annot_kws={"size": 15})  # font size
             plt.ylabel('truth')
             plt.xlabel('predicted')
             plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter), size=22)
