@@ -586,10 +586,10 @@ class Metrics(Callback):
         self.total_samples += batch_logs['y_true'].size(0)
 
 
-    def update_classic_logs_few_shots(self, batch_logs):
-        self.correct_train += ((batch_logs['y_pred_real_lab'].cuda() if self.use_cuda else batch_logs['y_pred_real_lab']) ==
-                               (batch_logs['y_true_real_lab'].cuda() if self.use_cuda else batch_logs['y_true_real_lab'])).sum().item()
-        self.total_samples += batch_logs['y_true_real_lab'].size(0)
+    # def update_classic_logs_few_shots(self, batch_logs):
+    #     self.correct_train += ((batch_logs['y_pred_real_lab'].cuda() if self.use_cuda else batch_logs['y_pred_real_lab']) ==
+    #                            (batch_logs['y_true_real_lab'].cuda() if self.use_cuda else batch_logs['y_true_real_lab'])).sum().item()
+    #     self.total_samples += batch_logs['y_true_real_lab'].size(0)
 
 class RunningMetrics(Metrics):
     def __init__(self, use_cuda, log_every, log_text=''):
@@ -670,12 +670,6 @@ class TotalAccuracyMetric(Metrics):
         if self.to_weblogger == 2:
             neptune.log_metric(metric_str, logs['total_accuracy'])
 
-
-class TotalAccuractMetricFewShots(TotalAccuracyMetric):
-    def on_training_step_end(self, batch_index, batch_logs=None):
-        self.update_classic_logs_few_shots(batch_logs)
-
-
 class ComputeConfMatrix(Callback):
     def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text=''):
         self.num_classes = num_classes
@@ -699,7 +693,7 @@ class ComputeConfMatrix(Callback):
 
         if self.weblogger:
             figure = plt.figure(figsize=(20, 15))
-            sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".2f", annot_kws={"size": 15})  # font size
+            sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".2f", annot_kws={"size": 15}, vmin=0, vmax=1)  # font size
             plt.ylabel('truth')
             plt.xlabel('predicted')
             plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter), size=22)
@@ -777,8 +771,10 @@ class ComputeDataFrame(Callback):
         self.network_name = network_name
         self.additional_logs_names = []
 
-        self.index_dataframe = ['net', 'class_name', 'is_correct', 'class_output']
-        self.column_names = self.build_columns(['class {}'.format(i) for i in range(self.num_classes)])
+        self.index_dataframe = ['net', 'class_name', 'class_output']
+        self.column_names = ['is_correct']
+        if output_and_softmax:
+            self.column_names.extend(self.build_columns(['class {}'.format(i) for i in range(self.num_classes)]))
         self.rows_frames = []
         self.use_cuda = use_cuda
         self.weblogger = weblogger
@@ -831,28 +827,28 @@ class ComputeDataFrame(Callback):
                 assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
                 assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
 
-                self.rows_frames.append([self.network_name, label, correct, predicted, *add_logs, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
+                self.rows_frames.append([self.network_name, label, predicted, correct, *add_logs, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
             else:
-                self.rows_frames.append([self.network_name, label, correct, predicted, *add_logs])
+                self.rows_frames.append([self.network_name, label, predicted, correct, *add_logs])
 
     def on_train_end(self, logs=None):
         data_frame = pd.DataFrame(self.rows_frames)
         data_frame = data_frame.set_index([i for i in range(len(self.index_dataframe))])
         data_frame.index.names = self.index_dataframe
-
-        if self.output_and_softmax:
-            data_frame.columns = self.column_names
-        data_frame.reset_index(level='is_correct', inplace=True)
+        data_frame.columns = self.column_names
 
         self._compute_and_log_metrics(data_frame)
         logs['dataframe'] = data_frame
 
 
 class ComputeDataFrame3D(ComputeDataFrame):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, n, k, q, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.additional_logs_names = ['support', 'task_num', 'campera_posX', 'camera_posY', 'camera_posZ']
-        self.index_dataframe.extend(self.additional_logs_names)
+        self.n = n
+        self.k = k
+        self.q = q
+        self.additional_logs_names = ['task_num', 'query_campos_XYZ', 'support_campos_XYZ']
+        self.column_names.extend(self.additional_logs_names)
         self.camera_positions_batch = None
         self.is_support = None
         self.task_num = None
@@ -860,11 +856,11 @@ class ComputeDataFrame3D(ComputeDataFrame):
     def _compute_additional_logs(self, batch, logs):
         self.camera_positions_batch = np.array(logs['more']['camera_positions'])
         self.task_num = logs['tot_iter']
-        self.is_support_t = logs['more']['support']
-        self.is_support = np.array(self.is_support_t)
+        # self.is_support_t = logs['more']['support']
+        # self.is_support = np.array(self.is_support_t)
 
     def _get_additional_logs(self, sample_index):
-        additional_logs = [self.is_support[sample_index], self.task_num, self.camera_positions_batch[sample_index][0], self.camera_positions_batch[sample_index][1], self.camera_positions_batch[sample_index][2]]
+        additional_logs = [self.task_num, self.camera_positions_batch[self.n*self.k:][sample_index], self.camera_positions_batch[self.n * int(sample_index / self.q):self.n * int(sample_index / self.q) + self.n]]
         return additional_logs
 
 
@@ -947,14 +943,14 @@ class ComputeDataFrame2D(ComputeDataFrame):
             plt.close()
 
 
-class CompConfMatrixFewShot(ComputeConfMatrix):
-    def on_training_step_end(self, batch, logs=None):
-        if self.reset_every is not None and batch % self.reset_every == 0:
-            self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
-            self.num_iter = 0
-        for t, p in zip(logs['y_true_real_lab'].view(-1), logs['y_pred_real_lab'].view(-1)):
-            self.confusion_matrix[t.long(), p.long()] += 1
-        self.num_iter += 1
+# class CompConfMatrixFewShot(ComputeConfMatrix):
+#     def on_training_step_end(self, batch, logs=None):
+#         if self.reset_every is not None and batch % self.reset_every == 0:
+#             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
+#             self.num_iter = 0
+#         for t, p in zip(logs['y_true_real_lab'].view(-1), logs['y_pred_real_lab'].view(-1)):
+#             self.confusion_matrix[t.long(), p.long()] += 1
+#         self.num_iter += 1
 
 
 class PlotGradientWeblog(Callback):

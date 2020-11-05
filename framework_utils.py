@@ -48,8 +48,7 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1)
         wandb.run.summary['Log: {} mean'.format(dataset_name)] = mean
         wandb.run.summary['Log: {} std'.format(dataset_name)] = std
     if weblogger == 2:
-        neptune.log_text('Log/{} mean'.format(dataset_name), str(mean))
-        neptune.log_text('Log/{} std'.format(dataset_name), str(std))
+        neptune.log_text('Logs', f'{dataset_name} mean: {mean}, std: {std}')
     if isinstance(dataset, TranslateGenerator):
 
         size_object = dataset.size_object if dataset.size_object is not None else (0, 0)

@@ -185,6 +185,8 @@ class Experiment(ABC):
             logs['stop'] = True
             print('Early Stopping: {}'.format(cb.string))
 
+        num_classes = self._get_num_classes(train_loader)
+
         all_cb = [StandardMetrics(log_every=self.console_check_every, print_it=True,
                                   use_cuda=self.use_cuda,
                                   weblogger=0, log_text=log_text,
@@ -203,7 +205,13 @@ class Experiment(ABC):
 
 
                   StopFromUserInput(),
-                  PlotTimeElapsed(time_every=100)]
+                  PlotTimeElapsed(time_every=100),
+                  TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                      to_weblog=self.weblogger, log_text=log_text),
+                  ComputeConfMatrix(num_classes=num_classes,
+                                    weblogger=self.weblogger,
+                                    weblog_text=log_text,
+                                    reset_every=200)]
 
         all_cb += ([SaveModel(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
         if self.weblogger:
@@ -240,7 +248,14 @@ class Experiment(ABC):
         self.experiment_data[self.current_run]['accuracy'] = accuracy
 
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
-        all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter')]
+        all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
+                  ComputeConfMatrix(num_classes=num_classes,
+                                    weblogger=self.weblogger,
+                                    weblog_text=log_text,
+                                    reset_every=None),
+                  TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                      to_weblog=self.weblogger, log_text=log_text)]
+
         return all_cb
 
     def test(self, net, test_loaders_list, callbacks=None, log_text: List[str] = None):
@@ -278,11 +293,8 @@ class Experiment(ABC):
             result_path_loaders = os.path.dirname(result_path_data) + '/loaders_' + os.path.basename(result_path_data)
             pathlib.Path(os.path.dirname(result_path_data)).mkdir(parents=True, exist_ok=True)
             cloudpickle.dump(self.experiment_data, open(result_path_data, 'wb'))
-            cloudpickle.dump(self.experiment_loaders, open(result_path_loaders, 'wb'))
-            print('Saved data in {}, \nSaved loaders in {}'.format(result_path_data, result_path_loaders))
-            # if self.use_neptune:
-            #     neptune.log_artifact(result_path_data, result_path_data)
-            #     neptune.log_artifact(result_path_loaders, result_path_loaders)
+            # cloudpickle.dump(self.experiment_loaders, open(result_path_loaders, 'wb'))
+            print('Saved data in {}, \nSaved loaders in [nope]'.format(result_path_data)) #result_path_loaders))
         else:
             Warning('Results path is not specified!')
 
@@ -664,13 +676,6 @@ class SupervisedLearningExperiment(Experiment):
         num_classes = self._get_num_classes(train_loader)
 
         all_cb = super().prepare_train_callbacks(log_text, train_loader)
-        all_cb += [TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                       to_weblog=self.weblogger, log_text=log_text),
-                   ComputeConfMatrix(num_classes=num_classes,
-                                     weblogger=self.weblogger,
-                                     weblog_text=log_text,
-                                     reset_every=200)]
-
         if self.weblogger:
             all_cb += [RollingAccEachClassWeblog(log_every=self.weblog_check_every,
                                                  num_classes=num_classes,
@@ -777,27 +782,6 @@ class FewShotLearningExp(Experiment):
                    iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q},
                    epochs=epochs)
 
-    def prepare_train_callbacks(self, log_text, train_loader):
-        all_cb = super().prepare_train_callbacks(log_text, train_loader)
-        all_cb += [CompConfMatrixFewShot(num_classes=self._get_num_classes(train_loader),
-                                         weblogger=self.weblogger,
-                                         weblog_text=log_text,
-                                         reset_every=200),
-                   TotalAccuractMetricFewShots(use_cuda=self.use_cuda,
-                                               to_weblog=self.weblogger, log_text=log_text)]
-        return all_cb
-
-    def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
-        all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
-        all_cb += [CompConfMatrixFewShot(num_classes=num_classes,
-                                         weblogger=self.weblogger,
-                                         weblog_text=log_text,
-                                         reset_every=None),
-                   TotalAccuractMetricFewShots(use_cuda=self.use_cuda,
-                                               to_weblog=self.weblogger, log_text=log_text)]
-
-        return all_cb
-
 
 class FewShotLearningExpUnity(FewShotLearningExp):
     def __init__(self, **kwargs):
@@ -868,7 +852,10 @@ class FewShotLearningExpUnity(FewShotLearningExp):
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
         all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
         if save_dataframe:
-            all_cb += [ComputeDataFrame3D(num_classes=self.k,
+            all_cb += [ComputeDataFrame3D(n=self.n,
+                                          k=self.k,
+                                          q=self.q,
+                                          num_classes=self.k,
                                           use_cuda=self.use_cuda,
                                           network_name=self.network_name,
                                           size_canvas=self.size_canvas,
