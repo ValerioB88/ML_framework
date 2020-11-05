@@ -790,10 +790,11 @@ class FewShotLearningExp(Experiment):
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
         all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
         if save_dataframe:
-            all_cb += [ComputeDataframe(self.k,
-                                        self.use_cuda,
-                                        translation_type_str,
-                                        self.network_name, self.size_canvas,
+            all_cb += [ComputeDataframe(num_classes=self.k,
+                                        use_cuda=self.use_cuda,
+                                        translation_type_str=translation_type_str,
+                                        network_name=self.network_name,
+                                        size_canvas=self.size_canvas,
                                         log_density_weblog=self.weblogger,
                                         log_text_plot=log_text,
                                         output_and_softmax=False)]
@@ -836,6 +837,7 @@ class FewShotLearningExpUnity(FewShotLearningExp):
         self.name_datasets_testing = PARAMS['name_dataset_testing']
         if self.name_datasets_testing is None and self.name_dataset_training is None:
             self.play_mode = True
+            self.name_datasets_testing = []
         else:
             if self.name_datasets_testing is None and self.name_dataset_training is not None:
                 self.name_datasets_testing = self.name_dataset_training

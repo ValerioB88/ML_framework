@@ -752,6 +752,9 @@ class PlotTimeElapsed(Callback):
             print('Time Elapsed {} iter: {}'.format(self.time_every, time() - self.start_time))
             self.start_time = time()
 
+class ComputeDataFrame2D(ComputeDataFrame):
+    def __init__(self):
+
 
 class ComputeDataframe(Callback):
     @staticmethod
@@ -901,7 +904,6 @@ class CompConfMatrixFewShot(ComputeConfMatrix):
             self.confusion_matrix[t.long(), p.long()] += 1
         self.num_iter += 1
 
-# class ComputeCosineSimilarity
 
 class PlotGradientWeblog(Callback):
     grad = []
@@ -947,49 +949,3 @@ class PlotGradientWeblog(Callback):
 
             self.grad = []
             plt.close()
-#
-# class ComputeCosineSimilarity(Callback):
-#     def __init__(self, net, dataset, type_cossim='translation', save_path=None, log_text_plot='cossim'):
-#         # ToDo: for now always compute at the end but we can compute it at anytime changing detach_this_step
-#         self.log_text_plot = log_text_plot
-#         self.net = net
-#         self.dataset = dataset
-#         self.type_cossim = type_cossim
-#         if self.type_cossim == 'translation':
-#             self.cossim = CosSimTranslation(self.net, self.dataset)
-#         elif self.type_cossim == 'resize':
-#             self.cossim = CosSimResize(self.net, self.dataset)
-#         elif self.type_cossim == 'rotate':
-#             self.cossim = CosSimRotate(self.net, self.dataset)
-#         else:
-#             assert False, 'Type Cosine Similarity not Implemented'
-#         self.save_path = save_path
-#
-#         super().__init__()
-#
-#     @staticmethod
-#     def get_mean_std(cy, layer_name):
-#         cy = np.array([cy[y][layer_name] for y in cy])
-#         cymean = np.mean(cy, axis=0)
-#         cystd = np.std(cy, axis=0)
-#         return np.array(cymean), np.array(cystd)
-#
-#     def on_train_end(self, logs=None):
-#         cossim, x_values = self.cossim.calculate_cossim_network()
-#         penultimate_layer = list(cossim[0].keys())[-2]
-#         m, s = self.get_mean_std(cossim, penultimate_layer)
-#         # This could be moved to the appropriate cossim subclass if needed
-#         plt.plot(x_values, m, 'o')
-#         plt.fill_between(x_values, m - s, m + s, alpha=0.10)
-#         plt.xlabel('Values')
-#         plt.ylabel('Cosine Similarity')
-#
-#         wandb.log({'{}/Cosine Similarity [{}]'.format(self.log_text_plot, self.type_cossim): wandb.Image(plt)})
-#         plt.close()
-#
-#         if self.save_path is not None:
-#             pathlib.Path(os.path.dirname(self.save_path)).mkdir(parents=True, exist_ok=True)
-
-
-
-
