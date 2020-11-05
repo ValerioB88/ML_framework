@@ -647,16 +647,16 @@ class SupervisedLearningExperiment(Experiment):
         return network, params_to_update
 
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
-        all_cb = [TotalAccuracyMetric(use_cuda=self.use_cuda,
+        all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
+        all_cb += [TotalAccuracyMetric(use_cuda=self.use_cuda,
                                       to_weblog=self.weblogger, log_text=log_text),
-                  ComputeConfMatrix(num_classes=num_classes,
-                                    send_to_weblogger=self.weblogger,
-                                    weblog_text=log_text)]
-        all_cb += ([ComputeDataframe(num_classes,
+                   ComputeConfMatrix(num_classes=num_classes,
+                                     weblogger=self.weblogger,
+                                     weblog_text=log_text)]
+        all_cb += ([ComputeDataFrame2D(translation_type_str, num_classes,
                                      self.use_cuda,
-                                     translation_type_str,
                                      self.network_name, self.size_canvas,
-                                     log_density_weblog=True if self.weblogger else False, log_text_plot=log_text)]
+                                     log_density_weblog=self.weblogger, log_text_plot=log_text)]
                    if save_dataframe else[])
         return all_cb
 
@@ -789,16 +789,6 @@ class FewShotLearningExp(Experiment):
 
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
         all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
-        if save_dataframe:
-            all_cb += [ComputeDataframe(num_classes=self.k,
-                                        use_cuda=self.use_cuda,
-                                        translation_type_str=translation_type_str,
-                                        network_name=self.network_name,
-                                        size_canvas=self.size_canvas,
-                                        log_density_weblog=self.weblogger,
-                                        log_text_plot=log_text,
-                                        output_and_softmax=False)]
-
         all_cb += [CompConfMatrixFewShot(num_classes=num_classes,
                                          weblogger=self.weblogger,
                                          weblog_text=log_text,
@@ -875,6 +865,18 @@ class FewShotLearningExpUnity(FewShotLearningExp):
                                              triggered_action=ck.go_next_level)]
         return all_cb
 
+    def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
+        all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
+        if save_dataframe:
+            all_cb += [ComputeDataFrame3D(num_classes=self.k,
+                                          use_cuda=self.use_cuda,
+                                          network_name=self.network_name,
+                                          size_canvas=self.size_canvas,
+                                          log_text_plot=log_text,
+                                          weblogger=self.weblogger,
+                                          output_and_softmax=False)]
+        return all_cb
+
 class FewShotLearningExpFolder(FewShotLearningExp):
     def __init__(self, **kwargs):
         self.trainin_folder = None
@@ -922,3 +924,16 @@ class FewShotLearningExpFolder(FewShotLearningExp):
             warnings.warn(f'Experiment: Number of classes in the folder {data_loader.dataset.folder} < k ({self.k}. K will be changed to {data_loader.dataset.num_classes}')
             self.k = data_loader.dataset.num_classes
         super().call_run(data_loader, params_to_update, callbacks=callbacks, train=train, epochs=epochs)
+
+    def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
+        all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
+        if save_dataframe:
+            all_cb += [ComputeDataFrame2D(num_classes=self.k,
+                                          use_cuda=self.use_cuda,
+                                          translation_type_str=translation_type_str,
+                                          network_name=self.network_name,
+                                          size_canvas=self.size_canvas,
+                                          log_text_plot=log_text,
+                                          weblogger=self.weblogger,
+                                          output_and_softmax=False)]
+        return all_cb

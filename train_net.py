@@ -178,7 +178,7 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
 
 def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries, concatenate=False):
     logs = {}
-    x, y_real_labels,  = data
+    x, y_real_labels, more = data
     if train:
         model.train()
         optimizer.zero_grad()

@@ -677,10 +677,9 @@ class TotalAccuractMetricFewShots(TotalAccuracyMetric):
 
 
 class ComputeConfMatrix(Callback):
-    def __init__(self, num_classes, reset_every=None, send_to_weblogger=True, weblog_text='', weblogger=1):
+    def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text=''):
         self.num_classes = num_classes
         self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
-        self.send_to_weblogger = send_to_weblogger
         self.log_text_plot = weblog_text
         self.reset_every = reset_every
         self.num_iter = 0
@@ -698,7 +697,7 @@ class ComputeConfMatrix(Callback):
     def on_train_end(self, logs=None):
         logs['conf_mat_acc'] = (self.confusion_matrix / self.confusion_matrix.sum(1)[:, None]).numpy()
 
-        if self.send_to_weblogger:
+        if self.weblogger:
             figure = plt.figure(figsize=(20, 15))
             sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".2f", annot_kws={"size": 15})  # font size
             plt.ylabel('truth')
@@ -752,11 +751,8 @@ class PlotTimeElapsed(Callback):
             print('Time Elapsed {} iter: {}'.format(self.time_every, time() - self.start_time))
             self.start_time = time()
 
-class ComputeDataFrame2D(ComputeDataFrame):
-    def __init__(self):
 
-
-class ComputeDataframe(Callback):
+class ComputeDataFrame(Callback):
     @staticmethod
     def build_columns(cat_to_save):
         array = [np.concatenate(np.array([np.array(['softmax', 'softmax']),
@@ -773,36 +769,41 @@ class ComputeDataframe(Callback):
                                           cat_to_save]))]
         return array
 
-    def __init__(self, num_classes, use_cuda, translation_type_str, network_name, size_canvas, log_density_weblog=True, log_text_plot='', output_and_softmax=True):
+    def __init__(self, num_classes, use_cuda, network_name, size_canvas, weblogger=0, log_text_plot='', output_and_softmax=True):
         super().__init__()
         self.output_and_softmax = output_and_softmax
         self.size_canvas = size_canvas
         self.num_classes = num_classes
-        self.translation_type_str = translation_type_str
         self.network_name = network_name
+        self.additional_logs_names = []
 
-        self.index_dataframe = ['net', 'class_name', 'transl_X', 'transl_Y', 'size_X', 'size_Y', 'rotation', 'tested_area', 'is_correct', 'class_output']
+        self.index_dataframe = ['net', 'class_name', 'is_correct', 'class_output']
         self.column_names = self.build_columns(['class {}'.format(i) for i in range(self.num_classes)])
         self.rows_frames = []
         self.use_cuda = use_cuda
-        self.plot_density_on_weblogger = log_density_weblog
+        self.weblogger = weblogger
         self.log_text_plot = log_text_plot
+
+    def _compute_additional_logs(self, batch, logs):
+        return None
+
+    def _get_additional_logs(self, c):
+        return []
+
+    def _compute_and_log_metrics(self, data_frame):
+        pass
 
     def on_training_step_end(self, batch, logs=None):
         output_batch_t = logs['output']
         labels_batch_t = logs['y_true']
         predicted_batch_t = logs['y_pred']
-        face_center_batch_t = logs['more']['center']
-        size_object_batch_t = logs['more']['size']
-        rotation_batch_t = logs['more']['rotation']
 
         correct_batch_t = (utils.make_cuda(predicted_batch_t, self.use_cuda) == utils.make_cuda(labels_batch_t, self.use_cuda))
         labels = labels_batch_t.tolist()
         predicted_batch = predicted_batch_t.tolist()
         correct_batch = correct_batch_t.tolist()
-        face_center_batch = np.array([np.array(i) for i in face_center_batch_t]).transpose()
-        size_object_batch = np.array([np.array(i) for i in size_object_batch_t]).transpose()
-        rotation_batch = np.array([np.array(i) for i in rotation_batch_t]).transpose()
+
+        self._compute_additional_logs(batch, logs)
 
         if self.output_and_softmax:
             softmax_batch_t = torch.softmax(utils.make_cuda(output_batch_t, self.use_cuda), 1)
@@ -813,9 +814,9 @@ class ComputeDataframe(Callback):
             correct = correct_batch[c]
             label = labels[c]
             predicted = predicted_batch[c]
-            face_center = face_center_batch[c]
-            size_object = size_object_batch[c]
-            rotation_object = rotation_batch[c]
+
+            add_logs = self._get_additional_logs(c)
+            assert len(add_logs) == len(self.additional_logs_names), "The additiona log names and additional logs metric length do not match"
 
             if self.output_and_softmax:
                 softmax_all_cat = softmax_batch[c]
@@ -830,9 +831,9 @@ class ComputeDataframe(Callback):
                 assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
                 assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
 
-                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1],  size_object[0], size_object[1], rotation_object, self.translation_type_str, correct, predicted, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
+                self.rows_frames.append([self.network_name, label, correct, predicted, *add_logs, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
             else:
-                self.rows_frames.append([self.network_name, label, face_center[0], face_center[1], size_object[0], size_object[1], rotation_object, self.translation_type_str, correct, predicted])
+                self.rows_frames.append([self.network_name, label, correct, predicted, *add_logs])
 
     def on_train_end(self, logs=None):
         data_frame = pd.DataFrame(self.rows_frames)
@@ -843,7 +844,60 @@ class ComputeDataframe(Callback):
             data_frame.columns = self.column_names
         data_frame.reset_index(level='is_correct', inplace=True)
 
-        if self.plot_density_on_weblogger:
+        self._compute_and_log_metrics(data_frame)
+        logs['dataframe'] = data_frame
+
+
+class ComputeDataFrame3D(ComputeDataFrame):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.additional_logs_names = ['support', 'task_num', 'campera_posX', 'camera_posY', 'camera_posZ']
+        self.index_dataframe.extend(self.additional_logs_names)
+        self.camera_positions_batch = None
+        self.is_support = None
+        self.task_num = None
+
+    def _compute_additional_logs(self, batch, logs):
+        self.camera_positions_batch = np.array(logs['more']['camera_positions'])
+        self.task_num = logs['tot_iter']
+        self.is_support_t = logs['more']['support']
+        self.is_support = np.array(self.is_support_t)
+
+    def _get_additional_logs(self, sample_index):
+        additional_logs = [self.is_support[sample_index], self.task_num, self.camera_positions_batch[sample_index][0], self.camera_positions_batch[sample_index][1], self.camera_positions_batch[sample_index][2]]
+        return additional_logs
+
+
+class ComputeDataFrame2D(ComputeDataFrame):
+    def __init__(self, translation_type_str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.translation_type_str = translation_type_str
+        self.additional_logs_names = ['transl_X', 'transl_Y', 'size_X', 'size_Y', 'rotation', 'tested_area']
+        self.index_dataframe.extend(self.additional_logs_names)
+        self.face_center_batch = None
+        self.size_object_batch = None
+        self.rotation_batch = None
+
+    def _compute_additional_logs(self, batch, logs):
+        face_center_batch_t = logs['more']['center']
+        size_object_batch_t = logs['more']['size']
+        rotation_batch_t = logs['more']['rotation']
+
+        self.face_center_batch = np.array([np.array(i) for i in face_center_batch_t]).transpose()
+        self.size_object_batch = np.array([np.array(i) for i in size_object_batch_t]).transpose()
+        self.rotation_batch = np.array([np.array(i) for i in rotation_batch_t]).transpose()
+
+    def _get_additional_logs(self, sample_index):
+        additional_logs = [self.face_center_batch[sample_index][0],
+                self.face_center_batch[sample_index][1],
+                self.size_object_batch[sample_index][0],
+                self.size_object_batch[sample_index][1],
+                self.rotation_batch[sample_index],
+                self.translation_type_str]
+        return additional_logs
+
+    def _compute_and_log_metrics(self, data_frame):
+        if self.weblogger:
             # Plot Density Translation
             mean_accuracy_translation = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
             ax, fig, im = framework_utils.imshow_density(mean_accuracy_translation, plot_args={'interpolate': True, 'size_canvas': self.size_canvas}, vmin=1 / self.num_classes - 1 / self.num_classes * 0.2, vmax=1)
@@ -851,9 +905,9 @@ class ComputeDataframe(Callback):
             cbar = fig.colorbar(im)
             cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)
             metric_str = 'Density Plot/{}'.format(self.log_text_plot)
-            if self.plot_density_on_weblogger == 1:
+            if self.weblogger == 1:
                 wandb.log({metric_str: fig})
-            if self.plot_density_on_weblogger == 2:
+            if self.weblogger == 2:
                 neptune.log_image(metric_str, fig)
 
             plt.close()
@@ -868,9 +922,9 @@ class ComputeDataframe(Callback):
             plt.title('size-accuracy')
             print(f'Mean Accuracy Size: {mean_accuracy_size_X} for sizes: {x}')
             metric_str = 'Size Accuracy/{}'.format(self.log_text_plot)
-            if self.plot_density_on_weblogger == 1:
+            if self.weblogger == 1:
                 wandb.log({metric_str: plt})
-            if self.plot_density_on_weblogger == 2:
+            if self.weblogger == 2:
                 neptune.log_image(metric_str, fig)
             plt.close()
 
@@ -885,14 +939,12 @@ class ComputeDataframe(Callback):
             print(f'Mean Accuracy Rotation: {mean_accuracy_rotation} for rotation: {x}')
             # wandb.log({'{}/Rotation Accuracy'.format(self.log_text_plot): plt})
             metric_str = 'Rotation Accuracy/{}'.format(self.log_text_plot)
-            if self.plot_density_on_weblogger == 1:
+            if self.weblogger == 1:
                 wandb.log({metric_str: plt})
-            if self.plot_density_on_weblogger == 2:
+            if self.weblogger == 2:
                 neptune.log_image(metric_str, fig)
             plt.close()
             plt.close()
-
-        logs['dataframe'] = data_frame
 
 
 class CompConfMatrixFewShot(ComputeConfMatrix):
