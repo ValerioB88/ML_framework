@@ -21,6 +21,58 @@ pd.set_option("display.max.columns", None)
 pd.set_option("display.precision", 4)
 pd.set_option('display.width', desired_width)
 
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+from pyquaternion import Quaternion
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.spatial.transform import Rotation
+from matplotlib.patches import FancyArrowPatch
+from mpl_toolkits.mplot3d import proj3d
+
+def create_sphere():
+    plt.close('all')
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.gca(projection='3d')
+    # draw sphere
+    u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
+    x = np.cos(u)*np.sin(v)
+    y = np.sin(u)*np.sin(v)
+    z = np.cos(v)
+    ax.plot_wireframe(x, y, z, color=[1, 0, 0, 0.2])
+
+    # draw a point
+    ax.scatter([0], [0], [0], color="g", s=100)
+
+    vv = [1, 0, 0]
+    add_norm_vector(vv, 'b', ax=ax)
+    return ax
+
+
+class Arrow3D(FancyArrowPatch):
+    def __init__(self, xs, ys, zs, *args, **kwargs):
+        FancyArrowPatch.__init__(self, (0, 0), (0, 0), *args, **kwargs)
+        self._verts3d = xs, ys, zs
+
+    def draw(self, renderer):
+        xs3d, ys3d, zs3d = self._verts3d
+        xs, ys, zs = proj3d.proj_transform(xs3d, ys3d, zs3d, renderer.M)
+        self.set_positions((xs[0], ys[0]), (xs[1], ys[1]))
+        FancyArrowPatch.draw(self, renderer)
+
+def norm_v(v):
+    return v / np.linalg.norm(v)
+
+def add_norm_vector(u, col="k", ax=None, norm=True):
+    if norm:
+        u = norm_v(u)
+    vh = Arrow3D([0, u[0]], [0, u[1]], [0, u[2]], mutation_scale=20,
+            lw=1, arrowstyle="-|>", color=col)
+    ax.add_artist(vh)
+    return vh
+
+
 
 def make_cuda(fun, is_cuda):
     return fun.cuda() if is_cuda else fun
