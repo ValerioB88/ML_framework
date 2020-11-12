@@ -10,6 +10,12 @@ from PIL import Image
 from matplotlib import pyplot as plt
 from matplotlib.patches import Rectangle
 from scipy import interpolate
+import plotly.express as px
+import plotly.graph_objects as go
+from scipy.spatial.transform import Rotation
+from matplotlib.patches import FancyArrowPatch
+from mpl_toolkits.mplot3d import proj3d
+
 
 from generate_datasets.generators.translate_generator import TranslateGenerator
 from generate_datasets.generators.input_image_generator import InputImagesGenerator
@@ -23,16 +29,73 @@ pd.set_option('display.width', desired_width)
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-from pyquaternion import Quaternion
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.pyplot as plt
-import numpy as np
-from scipy.spatial.transform import Rotation
-from matplotlib.patches import FancyArrowPatch
-from mpl_toolkits.mplot3d import proj3d
 
-def create_sphere():
-    plt.close('all')
+def scatter_plot_on_sphere(points, correct, title):
+    df = pd.DataFrame(points, columns=['X', 'Y', 'Z']).join(pd.DataFrame({'correct': correct}))
+
+    theta = np.linspace(0, 2 * np.pi, 100)
+    phi = np.linspace(0, np.pi, 100)
+    x = np.outer(np.cos(theta), np.sin(phi))
+    y = np.outer(np.sin(theta), np.sin(phi))
+    z = np.outer(np.ones(100), np.cos(phi))
+##
+    data_sphere = go.Surface(
+            x=x,
+            y=y,
+            z=z,
+            opacity=0.2,
+            colorscale=[[0, 'rgb(220, 220, 220)'], [1, 'rgb(190, 190, 190)']],
+            hoverinfo='skip'
+    )
+    layout = go.Layout(
+        title=title,
+        height=800,
+        width=1000
+    )
+    plotlyfig = go.Figure(data=[go.Scatter3d(
+                                x=df['X'],
+                                y=df['Y'],
+                                z=df['Z'],
+                                mode='markers',
+                                marker=dict(
+                                    size=5,
+                                    color=['red' if i is False else 'blue' for i in df['correct']],                # set color to an array/list of desired values
+                                    opacity=0.2)
+                                )], layout=layout)
+    # px.scatter_3d(df, x='X', y='Y', z='Z', color='correct', opacity=0.5)
+    plotlyfig.add_trace(go.Scatter3d(x=[1], y=[0], z=[0], marker=dict(size=12, color=['green'])))
+    plotlyfig.add_trace(data_sphere)
+    return plotlyfig
+
+
+def align_vectors(u, v):
+    rot = Rotation.align_vectors([[1, 0, 0]], [u])
+    aligned_vec = rot[0].apply(v)
+    return aligned_vec
+
+
+def from_dataframe_to_3D_scatter(dataframe, title):
+    # Compute Distance Between Query and average support
+    query_campos = np.array([i for i in dataframe['query_campos_XYZ']])
+    support_campos = np.array([np.mean(i, axis=0) for i in dataframe['support_campos_XYZ']])
+    correct = [i for i in dataframe['is_correct']]
+
+    aligned_all_vectors = np.array([align_vectors(q, s) for q, s in zip(query_campos, support_campos)])
+    aligned_norm_vect = np.array([i / np.linalg.norm(i) for i in aligned_all_vectors])
+    mplt_colors = ['r' if i is False else 'b' for i in correct]
+    plotly_colors = ['y' if i is False else 'b' for i in correct]
+    # MATPLOTLIB version
+    mplt_fig, ax = create_sphere(color='k')
+    plt.title(title, size=24)
+    add_norm_vector([2, 0, 0], ax=ax, col='k', norm=False)
+    ax.scatter(aligned_norm_vect[:, 0], aligned_norm_vect[:, 1], aligned_norm_vect[:, 2], c=mplt_colors)
+
+    # PLOTLY version
+    plotly_fig = scatter_plot_on_sphere(aligned_norm_vect, correct, title)
+    return plotly_fig, mplt_fig
+
+
+def create_sphere(color='r'):
     fig = plt.figure(figsize=(10, 10))
     ax = fig.gca(projection='3d')
     # draw sphere
@@ -40,38 +103,33 @@ def create_sphere():
     x = np.cos(u)*np.sin(v)
     y = np.sin(u)*np.sin(v)
     z = np.cos(v)
-    ax.plot_wireframe(x, y, z, color=[1, 0, 0, 0.2])
+    ax.plot_wireframe(x, y, z, color=color, alpha=0.2)
 
     # draw a point
     ax.scatter([0], [0], [0], color="g", s=100)
 
     vv = [1, 0, 0]
     add_norm_vector(vv, 'b', ax=ax)
-    return ax
+    return fig, ax
 
 
-class Arrow3D(FancyArrowPatch):
-    def __init__(self, xs, ys, zs, *args, **kwargs):
-        FancyArrowPatch.__init__(self, (0, 0), (0, 0), *args, **kwargs)
-        self._verts3d = xs, ys, zs
+def add_norm_vector(u, col="k", ax=None, norm=True, lw=2, **kwargs):
+    class Arrow3D(FancyArrowPatch):
+        def __init__(self, xs, ys, zs, *args, **kwargs):
+            FancyArrowPatch.__init__(self, (0, 0), (0, 0), *args, **kwargs)
+            self._verts3d = xs, ys, zs
 
-    def draw(self, renderer):
-        xs3d, ys3d, zs3d = self._verts3d
-        xs, ys, zs = proj3d.proj_transform(xs3d, ys3d, zs3d, renderer.M)
-        self.set_positions((xs[0], ys[0]), (xs[1], ys[1]))
-        FancyArrowPatch.draw(self, renderer)
+        def draw(self, renderer):
+            xs3d, ys3d, zs3d = self._verts3d
+            xs, ys, zs = proj3d.proj_transform(xs3d, ys3d, zs3d, renderer.M)
+            self.set_positions((xs[0], ys[0]), (xs[1], ys[1]))
+            FancyArrowPatch.draw(self, renderer)
 
-def norm_v(v):
-    return v / np.linalg.norm(v)
-
-def add_norm_vector(u, col="k", ax=None, norm=True):
     if norm:
-        u = norm_v(u)
-    vh = Arrow3D([0, u[0]], [0, u[1]], [0, u[2]], mutation_scale=20,
-            lw=1, arrowstyle="-|>", color=col)
+        u = u / np.linalg.norm(u)
+    vh = Arrow3D([0, u[0]], [0, u[1]], [0, u[2]], mutation_scale=20, arrowstyle="-|>", color=col, lw=lw, **kwargs)
     ax.add_artist(vh)
     return vh
-
 
 
 def make_cuda(fun, is_cuda):
@@ -156,6 +214,8 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1)
         except StopIteration:
             Warning('Iteration stopped when plotting [{}] on Neptune'.format(dataset_name))
 
+    # if isinstance(dataset, UnityGenMetaLearning):
+        # dataset.sampler.
 
 def convert_pil_img_to_tensor(imageT, normalize):
     """
@@ -346,3 +406,5 @@ def imshow_density(values, ax=None, plot_args=None, **kwargs):
 
     plt.show()
     return ax, fig, im
+##
+

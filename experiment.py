@@ -242,10 +242,11 @@ class Experiment(ABC):
                                   train=True, callbacks=all_cb)
         return net
 
-    def finalize_test(self, df_testing, conf_mat, accuracy):
+    def finalize_test(self, df_testing, conf_mat, accuracy, id_text):
         self.experiment_data[self.current_run]['df_testing'] = df_testing
         self.experiment_data[self.current_run]['conf_mat_acc'] = conf_mat
         self.experiment_data[self.current_run]['accuracy'] = accuracy
+        self.experiment_data[self.current_run]['id_text'] = id_text
 
     def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
         all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
@@ -285,7 +286,7 @@ class Experiment(ABC):
             if save_dataframe:
                 df_testing.append(logs['dataframe'])
 
-        self.finalize_test(df_testing, conf_mat_acc_all_tests, accuracy_all_tests)
+        self.finalize_test(df_testing, conf_mat_acc_all_tests, accuracy_all_tests, text)
 
         return df_testing, conf_mat_acc_all_tests, accuracy_all_tests
 
@@ -296,7 +297,7 @@ class Experiment(ABC):
             pathlib.Path(os.path.dirname(result_path_data)).mkdir(parents=True, exist_ok=True)
             cloudpickle.dump(self.experiment_data, open(result_path_data, 'wb'))
             # cloudpickle.dump(self.experiment_loaders, open(result_path_loaders, 'wb'))
-            print('Saved data in {}, \nSaved loaders in [nope]'.format(result_path_data)) #result_path_loaders))
+            print('Saved data in {}, \nSaved loaders in [nope]'.format(result_path_data))  #result_path_loaders))
         else:
             Warning('Results path is not specified!')
 

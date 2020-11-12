@@ -21,7 +21,7 @@ import framework_utils as utils
 import pandas as pd
 import signal, os
 from cossim import CosSimTranslation, CosSimResize, CosSimRotate
-# from neptunecontrib.api import log_chart
+from neptunecontrib.api import log_chart
 
 
 class CallbackList(object):
@@ -856,12 +856,19 @@ class ComputeDataFrame3D(ComputeDataFrame):
     def _compute_additional_logs(self, batch, logs):
         self.camera_positions_batch = np.array(logs['more']['camera_positions'])
         self.task_num = logs['tot_iter']
-        # self.is_support_t = logs['more']['support']
-        # self.is_support = np.array(self.is_support_t)
 
     def _get_additional_logs(self, sample_index):
         additional_logs = [self.task_num, self.camera_positions_batch[self.n*self.k:][sample_index], self.camera_positions_batch[self.n * int(sample_index / self.q):self.n * int(sample_index / self.q) + self.n]]
         return additional_logs
+
+    def _compute_and_log_metrics(self, data_frame):
+        plotly_fig, mplt_fig = framework_utils.from_dataframe_to_3D_scatter(data_frame, title=self.log_text_plot)
+        metric_str = '3D Sphere'
+        if self.weblogger == 1:
+            pass
+        if self.weblogger == 2:
+            neptune.log_image(metric_str, mplt_fig)
+            log_chart(f'{self.log_text_plot} {metric_str}', plotly_fig)
 
 
 class ComputeDataFrame2D(ComputeDataFrame):
@@ -943,16 +950,6 @@ class ComputeDataFrame2D(ComputeDataFrame):
             plt.close()
 
 
-# class CompConfMatrixFewShot(ComputeConfMatrix):
-#     def on_training_step_end(self, batch, logs=None):
-#         if self.reset_every is not None and batch % self.reset_every == 0:
-#             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
-#             self.num_iter = 0
-#         for t, p in zip(logs['y_true_real_lab'].view(-1), logs['y_pred_real_lab'].view(-1)):
-#             self.confusion_matrix[t.long(), p.long()] += 1
-#         self.num_iter += 1
-
-
 class PlotGradientWeblog(Callback):
     grad = []
     layers = []
@@ -997,3 +994,5 @@ class PlotGradientWeblog(Callback):
 
             self.grad = []
             plt.close()
+##
+
