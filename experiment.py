@@ -266,9 +266,10 @@ class Experiment(ABC):
 
         conf_mat_acc_all_tests = []
         accuracy_all_tests = []
-
+        text = []
         print('*TESTS')
-        df_testing = pd.DataFrame([])
+        df_testing = []
+        # df_testing = pd.DataFrame([])
         for idx, testing_loader in enumerate(test_loaders_list):
             print('Testing on [{}], [{}]'.format(testing_loader.dataset.name_generator, testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no translation'))
             all_cb = self.prepare_test_callbacks(self._get_num_classes(testing_loader), log_text[idx] if log_text is not None else '', testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no transl', save_dataframe)
@@ -280,8 +281,9 @@ class Experiment(ABC):
                                       epochs=1)
             conf_mat_acc_all_tests.append(logs['conf_mat_acc'])
             accuracy_all_tests.append(logs['total_accuracy'])
+            text.append(log_text[idx])
             if save_dataframe:
-                df_testing = pd.concat((df_testing, logs['dataframe']))
+                df_testing.append(logs['dataframe'])
 
         self.finalize_test(df_testing, conf_mat_acc_all_tests, accuracy_all_tests)
 
