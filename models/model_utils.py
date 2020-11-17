@@ -6,7 +6,7 @@ class Flatten(nn.Module):
     def forward(self, input):
         return input.view(input.size(0), -1)
 
-def conv_block(in_channels: int, out_channels: int, kernel_size=3, max_pool=True) -> nn.Module:
+def conv_block(in_channels: int, out_channels: int, kernel_size=3, max_pool=True, batch_norm=True, act_fun='ReLU', bias=True) -> nn.Module:
     """Returns a Module that performs 3x3 convolution, ReLu activation, 2x2 max pooling.
 
     # Arguments
@@ -16,8 +16,15 @@ def conv_block(in_channels: int, out_channels: int, kernel_size=3, max_pool=True
     size -> size / 2 (because padding is 1)
     """
 
-    module = [nn.Conv2d(in_channels, out_channels, kernel_size, padding=1),
-              nn.BatchNorm2d(out_channels),
-              nn.ReLU()]
+    module = [nn.Conv2d(in_channels, out_channels, kernel_size, padding=1, bias=bias)]
+    module.append(nn.BatchNorm2d(out_channels)) if batch_norm else None
+    if act_fun == 'ReLU':
+        module.append(nn.ReLU())
+    elif act_fun == 'Sigmoid':
+        module.append(nn.Sigmoid())
+    elif act_fun == 'Tanh':
+        module.append(nn.Tanh())
+    else:
+        assert False, "Activation Function not recognized"
     module.append(nn.MaxPool2d(kernel_size=2, stride=2)) if max_pool else None
     return nn.Sequential(*module)

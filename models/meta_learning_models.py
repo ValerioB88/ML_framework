@@ -55,20 +55,21 @@ def get_few_shot_encoder(num_input_channels=1, output=64, flatten=True) -> nn.Mo
 
 class RelationNetSung(nn.Module):
     def __init__(self, output_encoder=64, size_canvas=(224, 224), n_shots=1):
-        flatten_size = (np.multiply(*np.array(size_canvas)/np.power(2, 6)) * 64).astype(int)
         super().__init__()
+        flatten_size = (np.multiply(*np.array(size_canvas) / np.power(2, 6)) * 64).astype(int)
+
         self.encoder = nn.Sequential(conv_block(3, 64),
-                                     conv_block(64, 64),
-                                     conv_block(64, 64, max_pool=True),
-                                     conv_block(64, output_encoder, max_pool=True))
+                       conv_block(64, 64),
+                       conv_block(64, 64, max_pool=True),
+                       conv_block(64, output_encoder, max_pool=True))
 
         self.relation_net = nn.Sequential(conv_block(n_shots * output_encoder + output_encoder, 64),
-                                          conv_block(64, 64),
-                                          Flatten(),
-                                          nn.Linear(flatten_size, 8),
-                                          nn.ReLU(True),
-                                          nn.Linear(8, 1),
-                                          nn.Sigmoid())
+                            conv_block(64, 64),
+                            Flatten(),
+                            nn.Linear(flatten_size, 8),
+                            nn.ReLU(True),
+                            nn.Linear(8, 1),
+                            nn.Sigmoid())
 
 
 class MatchingNetwork(nn.Module):

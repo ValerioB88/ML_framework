@@ -7,6 +7,7 @@ import torch
 from collections import OrderedDict, Iterable
 import warnings
 import os
+import copy
 import csv
 import io
 import neptune
@@ -697,7 +698,7 @@ class ComputeConfMatrix(Callback):
             plt.ylabel('truth')
             plt.xlabel('predicted')
             plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter), size=22)
-            metric_str = 'Confusion Matrix' # {}'.format(self.log_text_plot)
+            metric_str = 'Confusion Matrix'  # {}'.format(self.log_text_plot)
             if self.weblogger == 1:
                 wandb.log({metric_str: wandb.Image(plt)})
             if self.weblogger == 2:
@@ -705,6 +706,49 @@ class ComputeConfMatrix(Callback):
                 # log_chart(name=metric_str, chart=figure)
 
             plt.close()
+#
+# class ComputeCorrectAndFrequencyMatchingMatrix(Callback):
+#     def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text=''):
+#         self.num_classes = num_classes
+#         self.correct_matrix = torch.zeros(self.num_classes, self.num_classes)
+#         self.frequency_matrix = torch.zeros(self.num_classes, self.num_classes)
+#
+#         self.log_text_plot = weblog_text
+#         self.reset_every = reset_every
+#         self.num_iter = 0
+#         self.weblogger = weblogger
+#         super().__init__()
+#
+#     def on_training_step_end(self, batch, logs=None):
+#         if self.reset_every is not None and batch % self.reset_every == 0:
+#             self.correct_matrix = torch.zeros(self.num_classes, self.num_classes)
+#             self.frequency_matrix = torch.zeros(self.num_classes, self.num_classes)
+#
+#             self.num_iter = 0
+#         correct = logs['y_true'] == logs['y_pred']
+#         for idx, l in enumerate(logs['more']['labels']):  # logs['y_true'].view(-1), logs['y_pred'].view(-1)):
+#             self.frequency_matrix[l[0].long(), l[1].long()] += 1
+#             if correct[idx]:
+#                 self.correct_matrix[l[0].long(), l[1].long()] += 1
+#         self.num_iter += 1
+#
+#     def on_train_end(self, logs=None):
+#         logs['conf_acc_freq'] = (self.correct_matrix / self.correct_matrix.sum(1)[:, None]).numpy()
+#
+#         if self.weblogger:
+#             figure = plt.figure(figsize=(20, 15))
+#             sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".2f", annot_kws={"size": 15}, vmin=0, vmax=1)  # font size
+#             plt.ylabel('truth')
+#             plt.xlabel('predicted')
+#             plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter), size=22)
+#             metric_str = 'Confusion Matrix'  # {}'.format(self.log_text_plot)
+#             if self.weblogger == 1:
+#                 wandb.log({metric_str: wandb.Image(plt)})
+#             if self.weblogger == 2:
+#                 neptune.log_image(metric_str, figure)
+#                 # log_chart(name=metric_str, chart=figure)
+#
+#             plt.close()
 
 
 class RollingAccEachClassWeblog(Callback):
@@ -780,9 +824,6 @@ class ComputeDataFrame(Callback):
         self.weblogger = weblogger
         self.log_text_plot = log_text_plot
 
-    def _compute_additional_logs(self, batch, logs):
-        return None
-
     def _get_additional_logs(self, c):
         return []
 
@@ -799,8 +840,6 @@ class ComputeDataFrame(Callback):
         predicted_batch = predicted_batch_t.tolist()
         correct_batch = correct_batch_t.tolist()
 
-        self._compute_additional_logs(batch, logs)
-
         if self.output_and_softmax:
             softmax_batch_t = torch.softmax(utils.make_cuda(output_batch_t, self.use_cuda), 1)
             softmax_batch = np.array(softmax_batch_t.tolist())
@@ -811,7 +850,7 @@ class ComputeDataFrame(Callback):
             label = labels[c]
             predicted = predicted_batch[c]
 
-            add_logs = self._get_additional_logs(c)
+            add_logs = self._get_additional_logs(logs, c)
             assert len(add_logs) == len(self.additional_logs_names), "The additiona log names and additional logs metric length do not match"
 
             if self.output_and_softmax:
@@ -827,7 +866,7 @@ class ComputeDataFrame(Callback):
                 assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
                 assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
 
-                self.rows_frames.append([self.network_name, label, predicted, correct, *add_logs, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
+                self.rows_frames.append([self.network_name, label, int(predicted), correct, *add_logs, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
             else:
                 self.rows_frames.append([self.network_name, label, predicted, correct, *add_logs])
 
@@ -841,23 +880,61 @@ class ComputeDataFrame(Callback):
         logs['dataframe'] = data_frame
 
 
-class ComputeDataFrame3D(ComputeDataFrame):
-    def __init__(self, n, k, q, *args, **kwargs):
+class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
+    def __init__(self, k, nSq, nSc, nFq, nFc, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.n = n
         self.k = k
-        self.q = q
-        self.additional_logs_names = ['task_num', 'query_campos_XYZ', 'support_campos_XYZ']
+        self.nSt = nSq
+        self.nSc = nSc
+        self.nFt = nFq
+        self.nFc = nFc
+        self.additional_logs_names = ['task_num', 'objC', 'objT',  'candidate_campos_XYZ', 'training_campos_XYZ',]
         self.column_names.extend(self.additional_logs_names)
         self.camera_positions_batch = None
         self.is_support = None
         self.task_num = None
 
-    def _compute_additional_logs(self, batch, logs):
+
+
+    def _get_additional_logs(self, logs, sample_index):
         self.camera_positions_batch = np.array(logs['more']['camera_positions'])
         self.task_num = logs['tot_iter']
 
-    def _get_additional_logs(self, sample_index):
+        def unity2python(v):
+            v = copy.deepcopy(v)
+            v.T[[1, 2]] = v.T[[2, 1]]
+            return v
+        camera_positions_candidates = self.camera_positions_batch[:self.k * self.nFc * self.nSc]
+        camera_positions_trainings = self.camera_positions_batch[self.k * self.nFc * self.nSc:]
+        #
+        # camera_positions = camera_positions.reshape((-1, 3))
+        # camera_positions_candidates = camera_positions[:self.k * self.nFc * self.nSc]
+        # camera_positions_trainings = camera_positions[self.k * self.nFc * self.nSc:]
+        #
+        # fig, ax = framework_utils.create_sphere()
+        # tr = unity2python(camera_positions_trainings[0])
+        # vh1 = framework_utils.add_norm_vector(tr, ax=ax, col='g')
+        # for i in camera_positions_candidates:
+        #     cand = unity2python(i)
+        #     vh2 = framework_utils.add_norm_vector(cand, ax=ax, col='k')
+        #     ali = framework_utils.align_vectors(cand, tr)
+        #     vh3 = framework_utils.add_norm_vector(ali, ax=ax, col='r')
+
+        # plt.show()
+        current_index_c = sample_index * (self.nSc * self.nFc) % (self.k * self.nSc * self.nFc)
+        current_index_t = int(sample_index/self.k) * (self.nSt * self.nFt)
+
+        add_logs = [self.task_num,
+                    logs['more']['labels'][sample_index][0].item(), logs['more']['labels'][sample_index][1].item(),
+                    np.array([unity2python(camera_positions_candidates[current_index_c + (nsc * self.nFc):current_index_c + ((nsc + 1) * self.nFc)]) for nsc in range(self.nSc)]), np.array([unity2python(camera_positions_trainings[current_index_t + (nsq * self.nFt):current_index_t + ((nsq + 1) * self.nFt)]) for nsq in range(self.nSt)])]
+
+        return add_logs
+
+class ComputeDataFrame3DmetaLearning(ComputeDataFrame):
+    def _get_additional_logs(self, logs, sample_index):
+        # each row is a camera query. It works even for Q>1
+        self.camera_positions_batch = np.array(logs['more']['camera_positions'])
+        self.task_num = logs['tot_iter']
         additional_logs = [self.task_num, self.camera_positions_batch[self.n*self.k:][sample_index], self.camera_positions_batch[self.n * int(sample_index / self.q):self.n * int(sample_index / self.q) + self.n]]
         return additional_logs
 
@@ -881,7 +958,8 @@ class ComputeDataFrame2D(ComputeDataFrame):
         self.size_object_batch = None
         self.rotation_batch = None
 
-    def _compute_additional_logs(self, batch, logs):
+
+    def _get_additional_logs(self, logs, sample_index):
         face_center_batch_t = logs['more']['center']
         size_object_batch_t = logs['more']['size']
         rotation_batch_t = logs['more']['rotation']
@@ -890,7 +968,6 @@ class ComputeDataFrame2D(ComputeDataFrame):
         self.size_object_batch = np.array([np.array(i) for i in size_object_batch_t]).transpose()
         self.rotation_batch = np.array([np.array(i) for i in rotation_batch_t]).transpose()
 
-    def _get_additional_logs(self, sample_index):
         additional_logs = [self.face_center_batch[sample_index][0],
                 self.face_center_batch[sample_index][1],
                 self.size_object_batch[sample_index][0],
@@ -972,7 +1049,10 @@ class PlotGradientWeblog(Callback):
             ave_grads = []
             for n, p in self.net.named_parameters():
                 if p.requires_grad and ("bias" not in n):
-                    ave_grads.append(p.grad.abs().mean())
+                    if p.grad is None:
+                        print(f"Gradient for layer {n} is None. Skipping")
+                    else:
+                        ave_grads.append(p.grad.abs().mean())
             self.grad.append(ave_grads)
 
         if batch % self.plot_every == 0:

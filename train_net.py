@@ -8,6 +8,10 @@ from callbacks import DefaultCallback, ProgressBarLogger, CallbackList, Callback
 from framework_utils import make_cuda
 import framework_utils
 from torch._six import inf
+from models.sequence_learner import SequenceMatchingNetSimple
+import framework_utils
+from torchviz import make_dot
+
 EPSILON = 1e-8
 
 
@@ -135,7 +139,7 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         optimizer.zero_grad()
     else:
         model.eval()
-    embeddings = model.encoder(make_cuda(x, use_cuda))
+    embeddings = model.encoder_fr2seq(make_cuda(x, use_cuda))
     y = torch.arange(0, k_way, 1 / q_queries).long()
 
     # Samples are ordered by the NShotWrapper class as follows:
@@ -174,6 +178,168 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
     return loss, queries_real_labels, prediction_real_labels, logs
+
+def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, optimizer, use_cuda, train, k, nSt, nSc, nFt, nFc, concatenate=False):
+    if train:
+        model.train()
+        optimizer.zero_grad()
+        num_matching = k * k
+    else:
+        model.eval()
+        num_matching = k
+
+    logs = {}
+    assert nSc == 1 and nFc == 1
+    x, y_real_labels, more = data
+
+    more['labels'] = more['labels'][:num_matching, :]
+    y_matching_labels = more['labels']
+    y_matching_correct = torch.tensor([1 if i[0] == i[1] else 0 for i in y_matching_labels], dtype=torch.float)
+
+    ## all embeddings are computed together
+    candidates = x[:k]
+    training = x[k:]
+    emb_candidates = model.image_embedding_candidates(make_cuda(candidates, use_cuda))
+    emb_training = model.image_embedding_training(make_cuda(training, use_cuda))
+
+    ## embed nSc sequences of nFc frames
+    index = 0
+    seq_emb_t = make_cuda(torch.zeros(k, nSt, model.encoder_fr2seq.hidden_size), use_cuda)
+    obj_emb_t = make_cuda(torch.zeros(k, model.encoder_seq2obj.hidden_size), use_cuda)
+
+
+    for kk in range(k):
+        for seq in range(nSt):
+            fr_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda)
+            curr_seq = emb_training[index: index + nFt]
+            index += nFt
+            for f in range(nFt):
+                fr_output, fr_hidden = model.encoder_fr2seq(curr_seq[f].view(1, 1, -1),  fr_hidden)
+            seq_emb_t[kk, seq] = fr_hidden
+
+    for kk in range(k):
+        seq_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda)
+        for seq in range(nSt):
+            seq_output, seq_hidden = model.encoder_seq2obj(seq_emb_t[kk, seq].view(1, 1, -1), seq_hidden)
+        obj_emb_t[kk] = seq_hidden
+
+
+    c_set = emb_candidates.repeat((k, 1))
+    t_set = obj_emb_t.repeat_interleave(k, axis=0)
+    # ccat = torch.cat((c_set, q_set), axis=1)
+    relation_scores = model.relation_net(torch.abs(c_set-t_set))
+
+    rs = make_cuda(relation_scores.squeeze(0), use_cuda)
+    lb = make_cuda(y_matching_correct, use_cuda)
+    loss = loss_fn(rs, lb)
+    # assert len(x) == n_shot * k_way + k_way * q_queries
+    y_matching_predicted = torch.tensor(rs > 0.5, dtype=torch.int)
+
+    logs['output'] = relation_scores
+    logs['more'] = more
+
+    # make_dot(loss, params=dict(list(model.named_parameters()))).render("rnn_torchviz", format="png")
+    if train:
+        loss.backward()
+        # clip_grad_norm_(model.parameters(), 0.5)
+        optimizer.step()
+    return loss, y_matching_predicted, y_matching_correct, logs
+
+
+def sequence_net_step(data, model: SequenceMatchingNetSimple, loss_fn, optimizer, use_cuda, train, k, nSt, nSc, nFt, nFc, concatenate=False):
+    logs = {}
+    x, y_real_labels, more = data
+    if train:
+        model.train()
+        optimizer.zero_grad()
+    else:
+        model.eval()
+    # framework_utils.imshow_batch(x)
+
+    ## all embeddings are computed together
+    all_emb = model.image_embedding(make_cuda(x, use_cuda))
+    ## embed nSc sequences of nFc frames
+    index = 0
+    seq_emb_c = make_cuda(torch.zeros(k, nSc, model.encoder_fr2seq.hidden_size), use_cuda)
+    seq_emb_q = make_cuda(torch.zeros(k, nSt, model.encoder_fr2seq.hidden_size), use_cuda)
+    obj_emb_c = make_cuda(torch.zeros(k, model.encoder_seq2obj.hidden_size), use_cuda)
+    obj_emb_q = make_cuda(torch.zeros(k, model.encoder_seq2obj.hidden_size), use_cuda)
+
+    #
+    tot_seq = 0
+    for kk in range(k):
+        for seq in range(nSc):
+            fr_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda) #make_cuda(model.encoder_fr2seq.init_hidden(), use_cuda)
+            # hidden1 = torch.randn(1, 1, model.encoder_fr2seq.hidden_size)
+            # hidden2 = torch.randn(1, 1, model.encoder_fr2seq.hidden_size)
+
+            curr_seq = all_emb[index: index + nFc]
+            index += nFc
+            for f in range(nFc):
+                fr_output, fr_hidden = model.encoder_fr2seq(curr_seq[f].view(1, 1, -1), fr_hidden)
+            seq_emb_c[kk, tot_seq] = fr_hidden
+
+    #
+    for kk in range(k):
+        for seq in range(nSt):
+            fr_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda)
+            # fr_hidden = make_cuda(model.encoder_fr2seq.init_hidden(), use_cuda)
+            # hidden1 = torch.randn(1, 1, model.encoder_fr2seq.hidden_size)
+            # hidden2 = torch.randn(1, 1, model.encoder_fr2seq.hidden_size)
+
+            curr_seq = all_emb[index: index + nFt]
+            index += nFt
+            for f in range(nFt):
+                fr_output, fr_hidden = model.encoder_fr2seq(curr_seq[f].view(1, 1, -1),  fr_hidden)
+            seq_emb_q[kk, seq] = fr_hidden
+
+    #
+    for kk in range(k):
+        seq_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda)
+        for seq in range(nSc):
+            seq_output, seq_hidden = model.encoder_seq2obj(seq_emb_c[kk, seq].view(1, 1, -1), seq_hidden)
+        obj_emb_c[kk] = seq_hidden
+
+    for kk in range(k):
+        seq_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda)
+        for seq in range(nSt):
+            seq_output, seq_hidden = model.encoder_seq2obj(seq_emb_q[kk, seq].view(1, 1, -1), seq_hidden)
+        obj_emb_q[kk] = seq_hidden
+
+    c_set = obj_emb_c
+    q_set = obj_emb_q
+    # c_set = seq_emb_c.squeeze(axis=1)
+    # q_set = seq_emb_q.squeeze(axis=1)
+    # c_set = all_emb[:k]
+    # q_set = all_emb[k:]
+
+
+    c_set = c_set.repeat((k, 1))
+    q_set = q_set.repeat_interleave(k, axis=0)
+    # ccat = torch.cat((c_set, q_set), axis=1)
+    relation_scores = model.relation_net(torch.abs(c_set-q_set)).view((k, -1))
+
+    # loss = loss_fn(make_cuda(relation_scores, use_cuda),
+    #                make_cuda(torch.eye(k, dtype=torch.long), use_cuda))
+
+    loss = loss_fn(make_cuda(relation_scores, use_cuda),
+                   # make_cuda(torch.range(0, k-1, dtype=torch.long), use_cuda))
+                   make_cuda(torch.eye(k), use_cuda))
+    # assert len(x) == n_shot * k_way + k_way * q_queries
+
+    _, predicted = relation_scores.max(dim=1)
+    y_real_labels = y_real_labels[:k]
+    prediction_real_labels = y_real_labels[predicted]
+
+    logs['output'] = relation_scores
+    logs['more'] = more
+
+    # make_dot(loss, params=dict(list(model.named_parameters()))).render("rnn_torchviz", format="png")
+    if train:
+        loss.backward()
+        # clip_grad_norm_(model.parameters(), 0.5)
+        optimizer.step()
+    return loss, y_real_labels, prediction_real_labels, logs
 
 
 def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries, concatenate=False):

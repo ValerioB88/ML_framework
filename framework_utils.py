@@ -20,8 +20,7 @@ from mpl_toolkits.mplot3d import proj3d
 from generate_datasets.generators.translate_generator import TranslateGenerator
 from generate_datasets.generators.input_image_generator import InputImagesGenerator
 import wandb
-
-desired_width = 320
+desired_width = 380
 np.set_printoptions(linewidth=desired_width)
 pd.set_option("display.max.columns", None)
 pd.set_option("display.precision", 4)
@@ -68,10 +67,33 @@ def scatter_plot_on_sphere(points, correct, title):
     return plotlyfig
 
 
-def align_vectors(u, v):
-    rot = Rotation.align_vectors([[1, 0, 0]], [u])
-    aligned_vec = rot[0].apply(v)
-    return aligned_vec
+# def align_vectors(u, v):
+#     rot = Rotation.align_vectors([[1, 0, 0]], [u])
+#     aligned_vec = rot[0].apply(v)
+#     return aligned_vec
+
+def align_vectors(a, b):
+    def get_incl_and_azi(a):
+        # must be unit vector
+        incl = np.arccos(a[2])
+        azi = np.arctan2(a[1], a[0])
+        return incl, azi
+
+    def get_cart_coord(incl, azi, r=1):
+        x = r * np.sin(incl) * np.cos(azi)
+        y = r * np.sin(incl) * np.sin(azi)
+        z = r * np.cos(incl)
+        return x, y, z
+
+    a = a/np.linalg.norm(a)
+    b = b/np.linalg.norm(b)
+    incl1, azi1 = get_incl_and_azi(a)
+    incl2, azi2 = get_incl_and_azi(b)
+
+    di = incl2 - incl1
+    da = azi2 - azi1
+    c = get_cart_coord(di + np.pi / 2, da)
+    return np.array(c)
 
 
 def from_dataframe_to_3D_scatter(dataframe, title):
@@ -95,7 +117,7 @@ def from_dataframe_to_3D_scatter(dataframe, title):
     return plotly_fig, mplt_fig
 
 
-def create_sphere(color='r'):
+def create_sphere(color='r', r=1):
     fig = plt.figure(figsize=(10, 10))
     ax = fig.gca(projection='3d')
     # draw sphere
@@ -103,13 +125,15 @@ def create_sphere(color='r'):
     x = np.cos(u)*np.sin(v)
     y = np.sin(u)*np.sin(v)
     z = np.cos(v)
-    ax.plot_wireframe(x, y, z, color=color, alpha=0.2)
+    ax.plot_wireframe(x*r, y*r, z*r, color=color, alpha=0.2)
 
     # draw a point
     ax.scatter([0], [0], [0], color="g", s=100)
 
-    vv = [1, 0, 0]
-    add_norm_vector(vv, 'b', ax=ax)
+    vv = np.array([1, 0, 0])
+    add_norm_vector(vv * r, 'b', ax=ax, norm=False)
+
+    plt.tight_layout()
     return fig, ax
 
 
@@ -140,7 +164,7 @@ def remap_value(x, range_source, range_target):
     return range_target[0] + (x - range_source[0]) * (range_target[1] - range_target[0]) / (range_source[1] - range_source[0])
 
 
-def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1):
+def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1, num_batches_to_log=2):
     compute_my_generator_info = False
     if isinstance(dataloader.dataset, InputImagesGenerator):
         dataset = dataloader.dataset
@@ -191,7 +215,7 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1)
 
     iterator = iter(dataloader)
     nc = dataloader.dataset.name_classes
-    for i in range(2):
+    for i in range(num_batches_to_log):
         try:
             images, labels, more = next(iterator)
             images = images[0:np.max((4, len(images)))]
