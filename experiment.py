@@ -233,7 +233,7 @@ class Experiment(ABC):
         all_cb = self.prepare_train_callbacks(log_text, train_loader)
 
         all_cb += (callbacks or [])
-        # assert self._get_num_classes(train_loader) == self.net.classifier[-1].out_features, f"Net output size [{self.net.classifier[-1].out_features}] doesn't match number of classes [{self._get_num_classes(train_loader)}]"
+
         net, logs = self.call_run(train_loader,
                                   params_to_update=params_to_update,
                                   train=True, callbacks=all_cb)
@@ -245,7 +245,7 @@ class Experiment(ABC):
         self.experiment_data[self.current_run]['accuracy'] = accuracy
         self.experiment_data[self.current_run]['id_text'] = id_text
 
-    def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
+    def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
         all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
                                       to_weblog=self.weblogger, log_text=log_text)]
@@ -267,7 +267,8 @@ class Experiment(ABC):
         # df_testing = pd.DataFrame([])
         for idx, testing_loader in enumerate(test_loaders_list):
             print('Testing on [{}], [{}]'.format(testing_loader.dataset.name_generator, testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no translation'))
-            all_cb = self.prepare_test_callbacks(self._get_num_classes(testing_loader), log_text[idx] if log_text is not None else '', testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no transl', save_dataframe)
+            # testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no transl'
+            all_cb = self.prepare_test_callbacks(log_text[idx] if log_text is not None else '', testing_loader, save_dataframe)
             all_cb += (callbacks or [])
 
             net, logs = self.call_run(testing_loader,
@@ -655,16 +656,19 @@ class SupervisedLearningExperiment(Experiment):
             print(network)
         return network, params_to_update
 
-    def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
-        all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
+    def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
+        num_classes = self._get_num_classes(testing_loader)
+
+        all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
         all_cb += [TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_weblog=self.weblogger, log_text=log_text),
+                                       to_weblog=self.weblogger, log_text=log_text),
                    ComputeConfMatrix(num_classes=num_classes,
                                      weblogger=self.weblogger,
                                      weblog_text=log_text)]
-        all_cb += ([ComputeDataFrame2D(translation_type_str, num_classes,
-                                     self.use_cuda,
-                                     self.network_name, self.size_canvas,
+        all_cb += ([ComputeDataFrame2D(testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no transl',
+                                       num_classes,
+                                       self.use_cuda,
+                                       self.network_name, self.size_canvas,
                                      log_density_weblog=self.weblogger, log_text_plot=log_text)]
                    if save_dataframe else[])
         return all_cb
@@ -875,11 +879,11 @@ class SequentialMetaLearningExp(Experiment):
                    optimizer=Adam(params_to_update, lr=0.001 if self.learning_rate is None else self.learning_rate),
                    iteration_step=self.step,
                    iteration_step_kwargs={'train': train,
-                                          'k': self.k,
-                                          'nSt': self.nSt,
-                                          'nSc': self.nSc,
-                                          'nFt': self.nFt,
-                                          'nFc': self.nFc},
+                                          'k': data_loader.dataset.sampler.k,
+                                          'nSt': data_loader.dataset.sampler.nSt,
+                                          'nSc': data_loader.dataset.sampler.nSc,
+                                          'nFt': data_loader.dataset.sampler.nFt,
+                                          'nFc': data_loader.dataset.sampler.nFc},
                    epochs=epochs)
 
     def prepare_train_callbacks(self, log_text, train_loader):
@@ -890,14 +894,17 @@ class SequentialMetaLearningExp(Experiment):
                                      weblog_text=log_text)]
         return all_cb
 
-    def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
-        all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
+    def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
+        all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
         if save_dataframe:
-            all_cb += [ComputeDataFrame3DsequenceLearning(k=self.k,
-                                                          nSq=self.nSt,
-                                                          nSc=self.nSc,
-                                                          nFq=self.nFt,
-                                                          nFc=self.nFc,
+            all_cb += [ComputeConfMatrix(num_classes=2,
+                                         weblogger=self.weblogger,
+                                         weblog_text=log_text),
+                       ComputeDataFrame3DsequenceLearning(k=testing_loader.dataset.sampler.k,
+                                                          nSt=testing_loader.dataset.sampler.nSt,
+                                                          nSc=testing_loader.dataset.sampler.nSc,
+                                                          nFt=testing_loader.dataset.sampler.nFt,
+                                                          nFc=testing_loader.dataset.sampler.nFc,
                                                           num_classes=self.k,
                                                           use_cuda=self.use_cuda,
                                                           network_name=self.network_name,
@@ -979,8 +986,8 @@ def few_shot_unity_builder_class(class_obj):
 
 
 class FewShotLearningExpUnityMetaLearning(few_shot_unity_builder_class(FewShotLearningExp)):
-    def prepare_test_callbacks(self, num_classes, log_text, translation_type_str, save_dataframe):
-        all_cb = super().prepare_test_callbacks(num_classes, log_text, translation_type_str, save_dataframe)
+    def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
+        all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
         if save_dataframe:
             all_cb += [ComputeDataFrame3DmetaLearning(n=self.n,
                                                       k=self.k,

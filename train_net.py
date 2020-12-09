@@ -179,6 +179,7 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
         optimizer.step()
     return loss, queries_real_labels, prediction_real_labels, logs
 
+
 def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, optimizer, use_cuda, train, k, nSt, nSc, nFt, nFc, concatenate=False):
     if train:
         model.train()
@@ -186,6 +187,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
         num_matching = k * k
     else:
         model.eval()
+        k = 1
         num_matching = k
 
     logs = {}
@@ -199,6 +201,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
     ## all embeddings are computed together
     candidates = x[:k]
     training = x[k:]
+    # print(f"k: {k} \ntraining: {training}\nshapeT: {training.shape} \n shapeX {x.shape} \nshapeC {candidates.shape}")
     emb_candidates = model.image_embedding_candidates(make_cuda(candidates, use_cuda))
     emb_training = model.image_embedding_training(make_cuda(training, use_cuda))
 
@@ -233,7 +236,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
     lb = make_cuda(y_matching_correct, use_cuda)
     loss = loss_fn(rs, lb)
     # assert len(x) == n_shot * k_way + k_way * q_queries
-    y_matching_predicted = torch.tensor(rs > 0.5, dtype=torch.int)
+    y_matching_predicted = torch.tensor(rs > 0.5, dtype=torch.int).T
 
     logs['output'] = relation_scores
     logs['more'] = more
@@ -243,7 +246,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
         loss.backward()
         # clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
-    return loss, y_matching_predicted, y_matching_correct, logs
+    return loss, y_matching_correct, y_matching_predicted, logs
 
 
 def sequence_net_step(data, model: SequenceMatchingNetSimple, loss_fn, optimizer, use_cuda, train, k, nSt, nSc, nFt, nFc, concatenate=False):

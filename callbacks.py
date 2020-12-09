@@ -866,9 +866,9 @@ class ComputeDataFrame(Callback):
                 assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
                 assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
 
-                self.rows_frames.append([self.network_name, label, int(predicted), correct, *add_logs, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
+                self.rows_frames.append([self.network_name, int(label), int(predicted), correct, *add_logs, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
             else:
-                self.rows_frames.append([self.network_name, label, predicted, correct, *add_logs])
+                self.rows_frames.append([self.network_name, int(label), int(predicted), correct, *add_logs])
 
     def on_train_end(self, logs=None):
         data_frame = pd.DataFrame(self.rows_frames)
@@ -881,12 +881,12 @@ class ComputeDataFrame(Callback):
 
 
 class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
-    def __init__(self, k, nSq, nSc, nFq, nFc, *args, **kwargs):
+    def __init__(self, k, nSt, nSc, nFt, nFc, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.k = k
-        self.nSt = nSq
+        self.nSt = nSt
         self.nSc = nSc
-        self.nFt = nFq
+        self.nFt = nFt
         self.nFc = nFc
         self.additional_logs_names = ['task_num', 'objC', 'objT',  'candidate_campos_XYZ', 'training_campos_XYZ',]
         self.column_names.extend(self.additional_logs_names)
@@ -904,6 +904,7 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
             v = copy.deepcopy(v)
             v.T[[1, 2]] = v.T[[2, 1]]
             return v
+
         camera_positions_candidates = self.camera_positions_batch[:self.k * self.nFc * self.nSc]
         camera_positions_trainings = self.camera_positions_batch[self.k * self.nFc * self.nSc:]
         #
