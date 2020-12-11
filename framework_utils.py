@@ -214,16 +214,24 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
                     break
 
     iterator = iter(dataloader)
-    nc = dataloader.dataset.name_classes
+    nc = dataset.name_classes
+    from generate_datasets.generators.unity_metalearning_generator import UnityGenMetaLearning
+
     for i in range(num_batches_to_log):
         try:
             images, labels, more = next(iterator)
-            images = images[0:np.max((4, len(images)))]
-            labels = labels[0:np.max((4, len(labels)))]
-            # more = more[0:np.max((4, len(more)))]
+            if isinstance(dataset, UnityGenMetaLearning):
+                labels = ["" for i in range(len(images))]
+                labels[:len(dataset.sampler.labels)] = [str(i) for i in dataset.sampler.labels]
+
+            else:
+                images = images[0:np.max((4, len(images)))]
+                labels = labels[0:np.max((4, len(labels)))]
+
+                # more = more[0:np.max((4, len(more)))]
 
             add_text = [''] * len(labels)
-            if 'image_name' in list(more.keys()):
+            if isinstance(more, dict) and 'image_name' in list(more.keys()):
                 add_text = more['image_name']
             metric_str = 'Debug/{} example images: [{}]'.format(log_text, dataset_name)
             if weblogger == 1:
@@ -356,9 +364,12 @@ def imshow_batch(inp, stats=None, title_lab=None, title_more=''):
             plt.imshow(image, cmap='gray')
         else:
             plt.imshow(image)
-        if title_lab is not None:
-            plt.title(str(title_lab[idx].item()) + ' ' + (title_more[idx] if title_more != '' else ''))
-
+        if title_lab is not None and len(title_lab) > idx:
+            if isinstance(title_lab[idx], torch.Tensor):
+                t = title_lab[idx].item()
+            else:
+                t = title_lab[idx]
+            plt.title(str(title_lab[idx]) + ' ' + (title_more[idx] if title_more != '' else ''))
     plt.pause(0.1)
     plt.tight_layout()
     return fig

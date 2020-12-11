@@ -879,11 +879,7 @@ class SequentialMetaLearningExp(Experiment):
                    optimizer=Adam(params_to_update, lr=0.001 if self.learning_rate is None else self.learning_rate),
                    iteration_step=self.step,
                    iteration_step_kwargs={'train': train,
-                                          'k': data_loader.dataset.sampler.k,
-                                          'nSt': data_loader.dataset.sampler.nSt,
-                                          'nSc': data_loader.dataset.sampler.nSc,
-                                          'nFt': data_loader.dataset.sampler.nFt,
-                                          'nFc': data_loader.dataset.sampler.nFc},
+                                          'dataset': data_loader.dataset},
                    epochs=epochs)
 
     def prepare_train_callbacks(self, log_text, train_loader):

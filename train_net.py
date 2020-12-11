@@ -11,7 +11,7 @@ from torch._six import inf
 from models.sequence_learner import SequenceMatchingNetSimple
 import framework_utils
 from torchviz import make_dot
-
+import matplotlib.pyplot as plt
 EPSILON = 1e-8
 
 
@@ -180,22 +180,28 @@ def matching_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     return loss, queries_real_labels, prediction_real_labels, logs
 
 
-def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, optimizer, use_cuda, train, k, nSt, nSc, nFt, nFc, concatenate=False):
+def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, optimizer, use_cuda, train, dataset, concatenate=False):
+    k = dataset.sampler.k
+    nSc = dataset.sampler.nSc
+    nSt = dataset.sampler.nSt
+    nFc = dataset.sampler.nFc
+    nFt = dataset.sampler.nFt
+    y_matching_labels = dataset.sampler.labels
+    camera_positions = dataset.sampler.camera_positions
+
     if train:
         model.train()
         optimizer.zero_grad()
-        num_matching = k * k
     else:
         model.eval()
         k = 1
-        num_matching = k
 
     logs = {}
     assert nSc == 1 and nFc == 1
-    x, y_real_labels, more = data
+    x, _, _ = data
 
-    more['labels'] = more['labels'][:num_matching, :]
-    y_matching_labels = more['labels']
+    framework_utils.imshow_batch(x, stats=dataset.stats, title_lab=y_matching_labels)
+
     y_matching_correct = torch.tensor([1 if i[0] == i[1] else 0 for i in y_matching_labels], dtype=torch.float)
 
     ## all embeddings are computed together
@@ -203,34 +209,44 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
     training = x[k:]
     # print(f"k: {k} \ntraining: {training}\nshapeT: {training.shape} \n shapeX {x.shape} \nshapeC {candidates.shape}")
     emb_candidates = model.image_embedding_candidates(make_cuda(candidates, use_cuda))
-    emb_training = model.image_embedding_training(make_cuda(training, use_cuda))
+    emb_training = model.image_embedding_candidates(make_cuda(training, use_cuda))
+    # plt.figure(2)
+    # plt.plot(emb_candidates.detach().numpy().T)
+    # plt.plot(emb_training.detach().numpy().T)
+    # framework_utils.imshow_batch(candidates, stats=dataset.stats)
+    # plt.figure(2)
+    # framework_utils.imshow_batch(training, stats=dataset.stats)
+
+
+    # emb_training = model.image_embedding_training(make_cuda(training, use_cuda))
 
     ## embed nSc sequences of nFc frames
-    index = 0
-    seq_emb_t = make_cuda(torch.zeros(k, nSt, model.encoder_fr2seq.hidden_size), use_cuda)
-    obj_emb_t = make_cuda(torch.zeros(k, model.encoder_seq2obj.hidden_size), use_cuda)
+    # index = 0
+    # seq_emb_t = make_cuda(torch.zeros(k, nSt, model.encoder_fr2seq.hidden_size), use_cuda)
+    # obj_emb_t = make_cuda(torch.zeros(k, model.encoder_seq2obj.hidden_size), use_cuda)
+    #
+    #
+    # for kk in range(k):
+    #     for seq in range(nSt):
+    #         fr_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda)
+    #         curr_seq = emb_training[index: index + nFt]
+    #         index += nFt
+    #         for f in range(nFt):
+    #             fr_output, fr_hidden = model.encoder_fr2seq(curr_seq[f].view(1, 1, -1),  fr_hidden)
+    #         seq_emb_t[kk, seq] = fr_hidden
+    #
+    # for kk in range(k):
+    #     seq_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda)
+    #     for seq in range(nSt):
+    #         seq_output, seq_hidden = model.encoder_seq2obj(seq_emb_t[kk, seq].view(1, 1, -1), seq_hidden)
+    #     obj_emb_t[kk] = seq_hidden
 
-
-    for kk in range(k):
-        for seq in range(nSt):
-            fr_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda)
-            curr_seq = emb_training[index: index + nFt]
-            index += nFt
-            for f in range(nFt):
-                fr_output, fr_hidden = model.encoder_fr2seq(curr_seq[f].view(1, 1, -1),  fr_hidden)
-            seq_emb_t[kk, seq] = fr_hidden
-
-    for kk in range(k):
-        seq_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda)
-        for seq in range(nSt):
-            seq_output, seq_hidden = model.encoder_seq2obj(seq_emb_t[kk, seq].view(1, 1, -1), seq_hidden)
-        obj_emb_t[kk] = seq_hidden
-
-
-    c_set = emb_candidates.repeat((k, 1))
-    t_set = obj_emb_t.repeat_interleave(k, axis=0)
+    # c_set = emb_candidates.repeat((k, 1))
+    # t_set = obj_emb_t.repeat_interleave(k, axis=0)
     # ccat = torch.cat((c_set, q_set), axis=1)
-    relation_scores = model.relation_net(torch.abs(c_set-t_set))
+    relation_scores = model.relation_net(torch.abs(emb_candidates-emb_training))
+
+    # relation_scores = model.relation_net(torch.abs(emb_candidates-obj_emb_t))
 
     rs = make_cuda(relation_scores.squeeze(0), use_cuda)
     lb = make_cuda(y_matching_correct, use_cuda)
@@ -239,7 +255,9 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
     y_matching_predicted = torch.tensor(rs > 0.5, dtype=torch.int).T
 
     logs['output'] = relation_scores
-    logs['more'] = more
+    logs['labels'] = y_matching_labels
+    logs['camera_positiosn'] = camera_positions
+
 
     # make_dot(loss, params=dict(list(model.named_parameters()))).render("rnn_torchviz", format="png")
     if train:
@@ -404,7 +422,7 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     return loss, queries_real_labels, prediction_real_labels, logs
 
 
-def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, iteration_step_kwargs=None, epochs=20):
+def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, iteration_step_kwargs=None, epochs=20):
     torch.cuda.empty_cache()
 
     if iteration_step_kwargs is None:
@@ -423,7 +441,7 @@ def run(train_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer
         epoch_logs = {}
         callbacks.on_epoch_begin(epoch)
         print('epoch: {}'.format(epoch))
-        for batch_index, data in enumerate(train_loader, 0):
+        for batch_index, data in enumerate(data_loader, 0):
 
             tot_iter += 1
             callbacks.on_batch_begin(batch_index)

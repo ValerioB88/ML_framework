@@ -897,7 +897,7 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
 
 
     def _get_additional_logs(self, logs, sample_index):
-        self.camera_positions_batch = np.array(logs['more']['camera_positions'])
+        self.camera_positions_batch = np.array(logs['camera_positions'])
         self.task_num = logs['tot_iter']
 
         def unity2python(v):
@@ -926,7 +926,7 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
         current_index_t = int(sample_index/self.k) * (self.nSt * self.nFt)
 
         add_logs = [self.task_num,
-                    logs['more']['labels'][sample_index][0].item(), logs['more']['labels'][sample_index][1].item(),
+                    logs['labels'][sample_index][0].item(), logs['labels'][sample_index][1].item(),
                     np.array([unity2python(camera_positions_candidates[current_index_c + (nsc * self.nFc):current_index_c + ((nsc + 1) * self.nFc)]) for nsc in range(self.nSc)]), np.array([unity2python(camera_positions_trainings[current_index_t + (nsq * self.nFt):current_index_t + ((nsq + 1) * self.nFt)]) for nsq in range(self.nSt)])]
 
         return add_logs
