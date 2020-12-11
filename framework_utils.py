@@ -218,22 +218,29 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
     from generate_datasets.generators.unity_metalearning_generator import UnityGenMetaLearning
 
     for i in range(num_batches_to_log):
+
         try:
             images, labels, more = next(iterator)
             if isinstance(dataset, UnityGenMetaLearning):
-                labels = ["" for i in range(len(images))]
-                labels[:len(dataset.sampler.labels)] = [str(i) for i in dataset.sampler.labels]
+                k, nSt, nFt, nSc, nFc, sc = dataset.sampler.k, dataset.sampler.nSt, dataset.sampler.nFt, dataset.sampler.nSc, dataset.sampler.nFc, dataset.size_canvas
+                tot_frames_each_iter = (nSt * nFt) + (nSc * nFc)
+                all_c = images[:k * nSc * nFc].reshape(k, nSc * nFc, 3, *sc).numpy()
+                all_t = images[k * nSc * nFc:].reshape(k, nSt * nFt, 3, *sc).numpy()
+                plot_images = torch.tensor(np.array([np.vstack((i, j)) for i, j in zip(all_c, all_t)]).reshape(k * tot_frames_each_iter, 3, 64, 64))
+                # labels = ["" for i in range(len(images))]
+                labels = ["" for i in range(k * (tot_frames_each_iter))]
+                labels[:-1:(nSt * nFt) + (nSc * nFc)] =  [str(i) for i in dataset.sampler.labels]
 
             else:
-                images = images[0:np.max((4, len(images)))]
+                plot_images = images[0:np.max((4, len(images)))]
                 labels = labels[0:np.max((4, len(labels)))]
 
                 # more = more[0:np.max((4, len(more)))]
-
             add_text = [''] * len(labels)
             if isinstance(more, dict) and 'image_name' in list(more.keys()):
                 add_text = more['image_name']
             metric_str = 'Debug/{} example images: [{}]'.format(log_text, dataset_name)
+
             if weblogger == 1:
                 wandb.log({metric_str:
                                [wandb.Image(convert_normalized_tensor_to_plottable_array(im, mean, std,
@@ -242,7 +249,7 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
              for im, lb, n in zip(images, labels, add_text)]}, step=0)
             if weblogger == 2:
                 [neptune.log_image(metric_str,
-                                   convert_normalized_tensor_to_plottable_array(im, mean, std, text=f'{lb}' + os.path.splitext(n)[0]).astype(np.uint8)) for im, lb, n in zip(images, labels, add_text)]
+                                   convert_normalized_tensor_to_plottable_array(im, mean, std, text=f'{lb}' + os.path.splitext(n)[0]).astype(np.uint8)) for im, lb, n in zip(plot_images, labels, add_text)]
         except StopIteration:
             Warning('Iteration stopped when plotting [{}] on Neptune'.format(dataset_name))
 

@@ -28,3 +28,5 @@ def conv_block(in_channels: int, out_channels: int, kernel_size=3, max_pool=True
         assert False, "Activation Function not recognized"
     module.append(nn.MaxPool2d(kernel_size=2, stride=2)) if max_pool else None
     return nn.Sequential(*module)
+
+

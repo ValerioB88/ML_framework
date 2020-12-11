@@ -200,16 +200,39 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
     assert nSc == 1 and nFc == 1
     x, _, _ = data
 
-    framework_utils.imshow_batch(x, stats=dataset.stats, title_lab=y_matching_labels)
+    # framework_utils.imshow_batch(x, stats=dataset.stats, title_lab=y_matching_labels)
 
     y_matching_correct = torch.tensor([1 if i[0] == i[1] else 0 for i in y_matching_labels], dtype=torch.float)
+    #
+    # b = torch.randn((30, 3, 32, 32))
+    # c = model.image_embedding_candidates(b)
+    # c[0]
+    #
+    # # b = torch.randn((30, 3, 32, 32))
+    # c2 = model.image_embedding_candidates(b[:10])
+    # c2[0]
+    #
+    # b10 = b[:10]
+    # c10 = model.image_embedding_candidates(b10)
+    # c10[0]
+    #
+    # c10[0] == c[0]  # false
 
     ## all embeddings are computed together
-    candidates = x[:k]
-    training = x[k:]
+    # x = make_cuda(x, use_cuda)
+    # candidates = x[:k]
+    # training = x[k:]
+    # emb_candidates = model.image_embedding_candidates(candidates)
+    # emb_training = model.image_embedding_trainings(training)
+
     # print(f"k: {k} \ntraining: {training}\nshapeT: {training.shape} \n shapeX {x.shape} \nshapeC {candidates.shape}")
-    emb_candidates = model.image_embedding_candidates(make_cuda(candidates, use_cuda))
-    emb_training = model.image_embedding_candidates(make_cuda(training, use_cuda))
+    ### USE THIS, IT WORKS!!###
+    x = make_cuda(x, use_cuda)
+    emb_all = model.image_embedding_candidates(x)
+    emb_candidates = emb_all[:k]
+    emb_trainings = emb_all[k:]
+############
+
     # plt.figure(2)
     # plt.plot(emb_candidates.detach().numpy().T)
     # plt.plot(emb_training.detach().numpy().T)
@@ -222,9 +245,19 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
 
     ## embed nSc sequences of nFc frames
     # index = 0
-    # seq_emb_t = make_cuda(torch.zeros(k, nSt, model.encoder_fr2seq.hidden_size), use_cuda)
+    # obj_emb_t = make_cuda(torch.zeros(k, model.encoder_fr2seq.hidden_size), use_cuda)
     # obj_emb_t = make_cuda(torch.zeros(k, model.encoder_seq2obj.hidden_size), use_cuda)
-    #
+
+    emb_sequence_batch = emb_trainings.reshape(k, nSt * nFt, 64)
+    fr_hidden = make_cuda(torch.randn(1, k, model.encoder_fr2seq.hidden_size), use_cuda)
+
+    out, h = model.encoder_fr2seq(emb_sequence_batch, fr_hidden)
+
+    # for kk in range(k):
+    #     for f in range(nFt*nSt):
+    #         fr_output, fr_hidden = model.encoder_fr2seq(emb_training[f].view(1, 1, -1),  fr_hidden)
+    #     obj_emb_t[kk] = fr_hidden
+
     #
     # for kk in range(k):
     #     for seq in range(nSt):
@@ -234,7 +267,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
     #         for f in range(nFt):
     #             fr_output, fr_hidden = model.encoder_fr2seq(curr_seq[f].view(1, 1, -1),  fr_hidden)
     #         seq_emb_t[kk, seq] = fr_hidden
-    #
+
     # for kk in range(k):
     #     seq_hidden = make_cuda(torch.randn(1, 1, model.encoder_fr2seq.hidden_size), use_cuda)
     #     for seq in range(nSt):
@@ -244,7 +277,9 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
     # c_set = emb_candidates.repeat((k, 1))
     # t_set = obj_emb_t.repeat_interleave(k, axis=0)
     # ccat = torch.cat((c_set, q_set), axis=1)
-    relation_scores = model.relation_net(torch.abs(emb_candidates-emb_training))
+    # relation_scores = model.relation_net(torch.cat((emb_training, emb_candidates), axis=1))
+
+    relation_scores = model.relation_net(torch.abs(emb_candidates-h.squeeze(0)))
 
     # relation_scores = model.relation_net(torch.abs(emb_candidates-obj_emb_t))
 
@@ -256,7 +291,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
 
     logs['output'] = relation_scores
     logs['labels'] = y_matching_labels
-    logs['camera_positiosn'] = camera_positions
+    logs['camera_positions'] = camera_positions
 
 
     # make_dot(loss, params=dict(list(model.named_parameters()))).render("rnn_torchviz", format="png")
@@ -264,6 +299,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
         loss.backward()
         # clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
+    # (y_matching_labels == y_matching_predicted).sum()
     return loss, y_matching_correct, y_matching_predicted, logs
 
 

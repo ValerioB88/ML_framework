@@ -894,8 +894,6 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
         self.is_support = None
         self.task_num = None
 
-
-
     def _get_additional_logs(self, logs, sample_index):
         self.camera_positions_batch = np.array(logs['camera_positions'])
         self.task_num = logs['tot_iter']
@@ -905,8 +903,8 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
             v.T[[1, 2]] = v.T[[2, 1]]
             return v
 
-        camera_positions_candidates = self.camera_positions_batch[:self.k * self.nFc * self.nSc]
-        camera_positions_trainings = self.camera_positions_batch[self.k * self.nFc * self.nSc:]
+        camera_positions_candidates = self.camera_positions_batch[sample_index][:self.nFc * self.nSc].reshape(self.nSc, self.nFc, 3)
+        camera_positions_trainings = self.camera_positions_batch[sample_index][self.nFc * self.nSc:].reshape(self.nSt, self.nFt, 3)
         #
         # camera_positions = camera_positions.reshape((-1, 3))
         # camera_positions_candidates = camera_positions[:self.k * self.nFc * self.nSc]
@@ -922,12 +920,12 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
         #     vh3 = framework_utils.add_norm_vector(ali, ax=ax, col='r')
 
         # plt.show()
-        current_index_c = sample_index * (self.nSc * self.nFc) % (self.k * self.nSc * self.nFc)
-        current_index_t = int(sample_index/self.k) * (self.nSt * self.nFt)
+        # current_index_c = sample_index * (self.nSc * self.nFc) % (self.k * self.nSc * self.nFc)
+        # current_index_t = int(sample_index/self.k) * (self.nSt * self.nFt)
 
         add_logs = [self.task_num,
                     logs['labels'][sample_index][0].item(), logs['labels'][sample_index][1].item(),
-                    np.array([unity2python(camera_positions_candidates[current_index_c + (nsc * self.nFc):current_index_c + ((nsc + 1) * self.nFc)]) for nsc in range(self.nSc)]), np.array([unity2python(camera_positions_trainings[current_index_t + (nsq * self.nFt):current_index_t + ((nsq + 1) * self.nFt)]) for nsq in range(self.nSt)])]
+                    np.array([unity2python(i) for i in camera_positions_candidates]), np.array([unity2python(i) for i in camera_positions_trainings])]
 
         return add_logs
 

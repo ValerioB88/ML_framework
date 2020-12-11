@@ -13,9 +13,9 @@ class EncoderRNN(nn.Module):
         self.hidden_size = hidden_size
 
         # self.embedding = nn.Embedding(input_size, hidden_size)
-        self.gru = nn.GRU(input_size, hidden_size)
+        self.gru = nn.GRU(input_size, hidden_size, batch_first=True)
 
-    def forward(self, input, hidden):
+    def forward(self, input, hidden=None):
         output, hidden = self.gru(input, hidden)
         return output, hidden
 
@@ -33,16 +33,16 @@ class SequenceNtrain1cand(nn.Module):
     def __init__(self):
         super().__init__()
         size_embedding_frame = 64
-        self.image_embedding_training = nn.Sequential(conv_block(3, 64, bias=False),
-                                             conv_block(64, 64, bias=False),
-                                             conv_block(64, 64, bias=False),
-                                             conv_block(64, 64, bias=False),
-                                             nn.AdaptiveAvgPool2d(1),
-                                             Flatten())  # output = 1 x 64
-        self.image_embedding_candidates = nn.Sequential(conv_block(3, 64, bias=False),
-                                                      conv_block(64, 64, bias=False),
-                                                      conv_block(64, 64, bias=False),
-                                                      conv_block(64, 64, bias=False),
+        # self.image_embedding_trainings = nn.Sequential(conv_block(3, 64, bias=False, batch_norm=False),
+        #                                      conv_block(64, 64, bias=False, batch_norm=False),
+        #                                      conv_block(64, 64, bias=False, batch_norm=False),
+        #                                      conv_block(64, 64, bias=False, batch_norm=False),
+        #                                      nn.AdaptiveAvgPool2d(1),
+        #                                      Flatten())  # output = 1 x 64
+        self.image_embedding_candidates = nn.Sequential(conv_block(3, 64, bias=True),
+                                                      conv_block(64, 64, bias=True),
+                                                      conv_block(64, 64, bias=True),
+                                                      conv_block(64, 64, bias=True),
                                                       nn.AdaptiveAvgPool2d(1),
                                                       Flatten())  # output = 1 x 64
 
@@ -50,12 +50,13 @@ class SequenceNtrain1cand(nn.Module):
         size_embedding_output = 256
         self.encoder_fr2seq = EncoderRNN(input_size=64, hidden_size=hidden_size)
         # you could put another linear layer that transforms the hidden output from the first encoder to something for the second one
-        self.encoder_seq2obj = EncoderRNN(input_size=hidden_size, hidden_size=hidden_size)
+        # self.encoder_seq2obj = EncoderRNN(input_size=hidden_size, hidden_size=hidden_size)
 
         self.relation_net = nn.Sequential(nn.Linear(64, 256),
                                           nn.BatchNorm1d(256),
-                                          nn.LeakyReLU(True),
-                                          nn.Linear(256, 1),
+                                          nn.Linear(256, 8),
+                                          nn.ReLU(True),
+                                          nn.Linear(8, 1),
                                           nn.Sigmoid())
 
         self._initialize_weights()
