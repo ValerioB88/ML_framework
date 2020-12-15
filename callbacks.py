@@ -876,23 +876,80 @@ class ComputeDataFrame(Callback):
         data_frame.index.names = self.index_dataframe
         data_frame.columns = self.column_names
 
-        self._compute_and_log_metrics(data_frame)
+        data_frame = self._compute_and_log_metrics(data_frame)
         logs['dataframe'] = data_frame
 
+# for now this is only supported with the UnityImageSampelrGenerator
+class PlotUnityImagesEveryOnceInAWhile(Callback):
+    counter = 0
+
+    def __init__(self, dataset, plot_every=100, plot_only_n_times=5):
+        self.dataset= dataset
+        self.plot_every = plot_every
+        self.plot_only_n_times = plot_only_n_times
+
+    def on_training_step_end(self, batch, logs=None):
+        if logs['tot_iter'] % self.plot_every == self.plot_every - 1 and self.counter < self.plot_only_n_times:
+            framework_utils.plot_images_on_weblogger(self.dataset, self.dataset.name_generator, self.dataset.stats, logs['images'], None, None, f"ITER {logs['tot_iter']}")
+            self.counter += 1
+
+from generate_datasets.generators.unity_metalearning_generator import TaskType
 
 class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
-    def __init__(self, k, nSt, nSc, nFt, nFc, *args, **kwargs):
+    def __init__(self, k, nSt, nSc, nFt, nFc, task_type, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.k = k
         self.nSt = nSt
         self.nSc = nSc
         self.nFt = nFt
         self.nFc = nFc
+        self.task_type = task_type
         self.additional_logs_names = ['task_num', 'objC', 'objT',  'candidate_campos_XYZ', 'training_campos_XYZ',]
         self.column_names.extend(self.additional_logs_names)
         self.camera_positions_batch = None
         self.is_support = None
         self.task_num = None
+
+    def _compute_and_log_metrics(self, data_frame):
+        def convert_to_azi(row, type):
+            a = row['candidate_campos_XYZ'][0][0]
+            b = row['training_campos_XYZ'][0][1]
+
+            def get_incl_and_azi(a):
+                # must be unit vector
+                a = a / np.linalg.norm(a)
+                incl = np.arccos(a[2])
+                azi = np.arctan2(a[1], a[0])
+                return incl, azi
+
+            inclination = int(np.round(np.rad2deg(get_incl_and_azi(a)[0] - get_incl_and_azi(b)[0])))
+            azimuth = int(np.round(np.rad2deg(-(get_incl_and_azi(a)[1] - get_incl_and_azi(b)[1]))))
+
+            if type == 'orthogonal':
+                if np.abs(azimuth) == 180:
+                    around = 180 - inclination
+                else:
+                    around = inclination
+                azimuth = 0
+                if around < 0:
+                    around = 360 + around
+            if type == 'same':
+                around = 0
+            if azimuth < 0:
+                azimuth += 360
+
+            row['azimuth'] = azimuth
+            row['around'] = around  # this is not really "inclination" - inclination goes from 0 to 180. This goes from 0 when aligned with the horizontal plane, and then it goes all around
+            return row
+        if self.task_type == TaskType.TRAIN:
+            type = ''
+        elif self.task_type == TaskType.TEST_ORTHOGONAL:
+            type = 'orthogonal'
+        elif self.task_type == TaskType.TEST_SAME_AXIS:
+            type = 'same'
+        print("Computing axes...")
+        data_frame = data_frame.apply(lambda row: convert_to_azi(row, type=type), axis=1)
+        return data_frame
 
     def _get_additional_logs(self, logs, sample_index):
         self.camera_positions_batch = np.array(logs['camera_positions'])
@@ -905,24 +962,28 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
 
         camera_positions_candidates = self.camera_positions_batch[sample_index][:self.nFc * self.nSc].reshape(self.nSc, self.nFc, 3)
         camera_positions_trainings = self.camera_positions_batch[sample_index][self.nFc * self.nSc:].reshape(self.nSt, self.nFt, 3)
-        #
-        # camera_positions = camera_positions.reshape((-1, 3))
-        # camera_positions_candidates = camera_positions[:self.k * self.nFc * self.nSc]
-        # camera_positions_trainings = camera_positions[self.k * self.nFc * self.nSc:]
-        #
-        # fig, ax = framework_utils.create_sphere()
-        # tr = unity2python(camera_positions_trainings[0])
-        # vh1 = framework_utils.add_norm_vector(tr, ax=ax, col='g')
-        # for i in camera_positions_candidates:
-        #     cand = unity2python(i)
-        #     vh2 = framework_utils.add_norm_vector(cand, ax=ax, col='k')
-        #     ali = framework_utils.align_vectors(cand, tr)
-        #     vh3 = framework_utils.add_norm_vector(ali, ax=ax, col='r')
 
+#################################~~~~~~DEBUG~~~~~~###############################################
+        # _, self.ax = framework_utils.create_sphere()
+        #
+        # import matplotlib.pyplot as plt
         # plt.show()
-        # current_index_c = sample_index * (self.nSc * self.nFc) % (self.k * self.nSc * self.nFc)
-        # current_index_t = int(sample_index/self.k) * (self.nSt * self.nFt)
-
+        # import copy
+        # def unity2python(v):
+        #     v = copy.deepcopy(v)
+        #     v.T[[1, 2]] = v.T[[2, 1]]
+        #     return v
+        #
+        # for idx, c in enumerate(self.camera_positions_batch):
+        #     if vh1:
+        #         # [i.remove() for i in vh1]
+        #         # [i.remove() for i in vh2]
+        #         vh1 = []
+        #         vh2 = []
+        #     for i in range(len(self.camera_positions_batch[0]) - 1):
+        #         vh2.append(framework_utils.add_norm_vector(unity2python(c[i + 1]), 'r', ax=self.ax))
+        #         vh1.append(framework_utils.add_norm_vector(unity2python(c[0]), 'k', ax=self.ax))
+#################################################################
         add_logs = [self.task_num,
                     logs['labels'][sample_index][0].item(), logs['labels'][sample_index][1].item(),
                     np.array([unity2python(i) for i in camera_positions_candidates]), np.array([unity2python(i) for i in camera_positions_trainings])]

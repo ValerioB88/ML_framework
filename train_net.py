@@ -199,7 +199,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
     logs = {}
     assert nSc == 1 and nFc == 1
     x, _, _ = data
-
+    logs['images'] = x
     # framework_utils.imshow_batch(x, stats=dataset.stats, title_lab=y_matching_labels)
 
     y_matching_correct = torch.tensor([1 if i[0] == i[1] else 0 for i in y_matching_labels], dtype=torch.float)
@@ -283,7 +283,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
 
     # relation_scores = model.relation_net(torch.abs(emb_candidates-obj_emb_t))
 
-    rs = make_cuda(relation_scores.squeeze(0), use_cuda)
+    rs = make_cuda(relation_scores.squeeze(1), use_cuda)
     lb = make_cuda(y_matching_correct, use_cuda)
     loss = loss_fn(rs, lb)
     # assert len(x) == n_shot * k_way + k_way * q_queries
@@ -476,7 +476,7 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
     for epoch in range(epochs):
         epoch_logs = {}
         callbacks.on_epoch_begin(epoch)
-        print('epoch: {}'.format(epoch))
+        print('epoch: {}'.format(epoch)) if epoch > 0 else None
         for batch_index, data in enumerate(data_loader, 0):
 
             tot_iter += 1

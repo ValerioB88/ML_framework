@@ -118,7 +118,7 @@ def from_dataframe_to_3D_scatter(dataframe, title):
 
 
 def create_sphere(color='r', r=1):
-    fig = plt.figure(figsize=(10, 10))
+    fig = plt.figure(figsize=(5, 5))
     ax = fig.gca(projection='3d')
     # draw sphere
     u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
@@ -165,24 +165,24 @@ def remap_value(x, range_source, range_target):
 
 
 def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1, num_batches_to_log=2):
+    stats = {}
     compute_my_generator_info = False
     if isinstance(dataloader.dataset, InputImagesGenerator):
         dataset = dataloader.dataset
         compute_my_generator_info = True
         dataset_name = dataset.name_generator
-        mean = dataloader.dataset.stats['mean']
-        std = dataloader.dataset.stats['std']
+        stats = dataloader.dataset.stats
     else:
         dataset_name = 'no_name' if dataset_name is None else dataset_name
-        mean = [0.5, 0.5, 0.5]
-        std = [0.2, 0.2, 0.2]
+        stats['mean'] = [0.5, 0.5, 0.5]
+        stats['std'] = [0.2, 0.2, 0.2]
         Warning('MEAN, STD AND DATASET_NAME NOT SET FOR NEPTUNE LOGGING. This message is not referring to normalizing in PyTorch')
 
     if weblogger == 1:
-        wandb.run.summary['Log: {} mean'.format(dataset_name)] = mean
-        wandb.run.summary['Log: {} std'.format(dataset_name)] = std
+        wandb.run.summary['Log: {} mean'.format(dataset_name)] = stats['mean']
+        wandb.run.summary['Log: {} std'.format(dataset_name)] = stats['std']
     if weblogger == 2:
-        neptune.log_text('Logs', f'{dataset_name} mean: {mean}, std: {std}')
+        neptune.log_text('Logs', f'{dataset_name} mean: {stats["mean"]}, std: {stats["std"]}')
     if isinstance(dataset, TranslateGenerator):
 
         size_object = dataset.size_object if dataset.size_object is not None else (0, 0)
@@ -215,46 +215,46 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
 
     iterator = iter(dataloader)
     nc = dataset.name_classes
-    from generate_datasets.generators.unity_metalearning_generator import UnityGenMetaLearning
 
     for i in range(num_batches_to_log):
-
-        try:
-            images, labels, more = next(iterator)
-            if isinstance(dataset, UnityGenMetaLearning):
-                k, nSt, nFt, nSc, nFc, sc = dataset.sampler.k, dataset.sampler.nSt, dataset.sampler.nFt, dataset.sampler.nSc, dataset.sampler.nFc, dataset.size_canvas
-                tot_frames_each_iter = (nSt * nFt) + (nSc * nFc)
-                all_c = images[:k * nSc * nFc].reshape(k, nSc * nFc, 3, *sc).numpy()
-                all_t = images[k * nSc * nFc:].reshape(k, nSt * nFt, 3, *sc).numpy()
-                plot_images = torch.tensor(np.array([np.vstack((i, j)) for i, j in zip(all_c, all_t)]).reshape(k * tot_frames_each_iter, 3, 64, 64))
-                # labels = ["" for i in range(len(images))]
-                labels = ["" for i in range(k * (tot_frames_each_iter))]
-                labels[:-1:(nSt * nFt) + (nSc * nFc)] =  [str(i) for i in dataset.sampler.labels]
-
-            else:
-                plot_images = images[0:np.max((4, len(images)))]
-                labels = labels[0:np.max((4, len(labels)))]
-
-                # more = more[0:np.max((4, len(more)))]
-            add_text = [''] * len(labels)
-            if isinstance(more, dict) and 'image_name' in list(more.keys()):
-                add_text = more['image_name']
-            metric_str = 'Debug/{} example images: [{}]'.format(log_text, dataset_name)
-
-            if weblogger == 1:
-                wandb.log({metric_str:
-                               [wandb.Image(convert_normalized_tensor_to_plottable_array(im, mean, std,
-                                                                             text=f'{lb}' +
-                                                                                  os.path.splitext(n)[0]).astype(np.uint8))
-             for im, lb, n in zip(images, labels, add_text)]}, step=0)
-            if weblogger == 2:
-                [neptune.log_image(metric_str,
-                                   convert_normalized_tensor_to_plottable_array(im, mean, std, text=f'{lb}' + os.path.splitext(n)[0]).astype(np.uint8)) for im, lb, n in zip(plot_images, labels, add_text)]
-        except StopIteration:
-            Warning('Iteration stopped when plotting [{}] on Neptune'.format(dataset_name))
-
+        images, labels, more = next(iterator)
+        plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger)
     # if isinstance(dataset, UnityGenMetaLearning):
         # dataset.sampler.
+
+
+def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger=2):
+    from generate_datasets.generators.unity_metalearning_generator import UnityGenMetaLearning
+    if isinstance(dataset, UnityGenMetaLearning):
+        k, nSt, nFt, nSc, nFc, sc = dataset.sampler.k, dataset.sampler.nSt, dataset.sampler.nFt, dataset.sampler.nSc, dataset.sampler.nFc, dataset.size_canvas
+        tot_frames_each_iter = (nSt * nFt) + (nSc * nFc)
+        all_c = images[:k * nSc * nFc].reshape(k, nSc * nFc, 3, *sc).numpy()
+        all_t = images[k * nSc * nFc:].reshape(k, nSt * nFt, 3, *sc).numpy()
+        plot_images = torch.tensor(np.array([np.vstack((i, j)) for i, j in zip(all_c, all_t)]).reshape(k * tot_frames_each_iter, 3, 64, 64))
+        # labels = ["" for i in range(len(images))]
+        labels = ["" for i in range(k * (tot_frames_each_iter))]
+        labels[:-1:(nSt * nFt) + (nSc * nFc)] = [str(i) for i in dataset.sampler.labels]
+
+    else:
+        plot_images = images[0:np.max((4, len(images)))]
+        labels = labels[0:np.max((4, len(labels)))]
+
+        # more = more[0:np.max((4, len(more)))]
+    add_text = [''] * len(labels)
+    if isinstance(more, dict) and 'image_name' in list(more.keys()):
+        add_text = more['image_name']
+    metric_str = 'Debug/{} example images: [{}]'.format(log_text, dataset_name)
+
+    if weblogger == 1:
+        wandb.log({metric_str:
+                       [wandb.Image(convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'],
+                                                                                 text=f'{lb}' +
+                                                                                      os.path.splitext(n)[0]).astype(np.uint8))
+                        for im, lb, n in zip(images, labels, add_text)]}, step=0)
+    if weblogger == 2:
+        [neptune.log_image(metric_str,
+                           convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'], text=f'{lb}' + os.path.splitext(n)[0]).astype(np.uint8)) for im, lb, n in zip(plot_images, labels, add_text)]
+
 
 def convert_pil_img_to_tensor(imageT, normalize):
     """

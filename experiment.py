@@ -24,7 +24,7 @@ from generate_datasets.generators.unity_metalearning_generator import UnityGenMe
 # from wandb import magic
 
 class Experiment(ABC):
-    def __init__(self, experiment_class_name='default_name', parser=None):
+    def __init__(self, experiment_class_name='default_name', parser=None, additional_tags=None):
         self.use_cuda = False
         if torch.cuda.is_available():
             print('Using cuda - you are probably on the server')
@@ -32,6 +32,7 @@ class Experiment(ABC):
         if parser is None:
             parser = argparse.ArgumentParser(allow_abbrev=False)
         parser = self.parse_arguments(parser)
+
         PARAMS = vars(parser.parse_known_args()[0])
         self.net = None
         self.size_canvas = (224, 224)
@@ -65,6 +66,7 @@ class Experiment(ABC):
         list_tags = []
         if self.additional_tags is not None:
             [list_tags.append(i) for i in self.additional_tags.split('_') if i != 'emptytag']
+        list_tags.extend(additional_tags)
         list_tags.append('ptvanilla') if self.pretraining == 'vanilla' else None
         list_tags.append('ptImageNet') if self.pretraining == 'ImageNet' else None
         list_tags.append(self.network_name)
@@ -225,6 +227,7 @@ class Experiment(ABC):
         return loader.dataset.num_classes
 
     def train(self, train_loader, callbacks=None, log_text='train'):
+        print(f"**Training** [{log_text}]");
         self.experiment_loaders[self.current_run]['training'].append(train_loader)
         self.net, params_to_update = self.get_net(self.network_name,
                                                   num_classes=self._get_num_classes(train_loader),
@@ -246,7 +249,8 @@ class Experiment(ABC):
         self.experiment_data[self.current_run]['id_text'] = id_text
 
     def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
-        all_cb = [StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
+        all_cb = [StopFromUserInput(),
+                  StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
                                       to_weblog=self.weblogger, log_text=log_text)]
 
@@ -256,17 +260,19 @@ class Experiment(ABC):
         self.net = net
         if log_text is None:
             log_text = [d.dataset.name_generator for d in test_loaders_list]
+        print(f"**Testing Started** [{log_text}]")
+
         self.experiment_loaders[self.current_run]['testing'].append(test_loaders_list)
         save_dataframe = True if self.output_filename is not None else False
 
         conf_mat_acc_all_tests = []
         accuracy_all_tests = []
         text = []
-        print('*TESTS')
         df_testing = []
         # df_testing = pd.DataFrame([])
         for idx, testing_loader in enumerate(test_loaders_list):
-            print('Testing on [{}], [{}]'.format(testing_loader.dataset.name_generator, testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no translation'))
+            # print('Testing on [{}], [{}]'.format(testing_loader.dataset.name_generator, testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no translation'))
+            print(f'Testing {idx+1}/{len(test_loaders_list)}: [{testing_loader.dataset.name_generator}]')
             # testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no transl'
             all_cb = self.prepare_test_callbacks(log_text[idx] if log_text is not None else '', testing_loader, save_dataframe)
             all_cb += (callbacks or [])
@@ -797,7 +803,7 @@ class SequentialMetaLearningExp(Experiment):
                         #ToDo: with a adaptive average pool make it accept whatever size
     """
 
-    def __init__(self, experiment_class_name):
+    def __init__(self, **kwargs):
         self.training_folder = None
         self.testing_folder = None
         self.nSc = None
@@ -807,7 +813,7 @@ class SequentialMetaLearningExp(Experiment):
         self.k = None
         self.step = None
         self.lossfn = None
-        super().__init__(experiment_class_name=experiment_class_name)
+        super().__init__(**kwargs)
 
     # def _get_num_classes(self, loader):
     #     return self.k
@@ -842,8 +848,8 @@ class SequentialMetaLearningExp(Experiment):
         self.nFt = PARAMS['nFt']
         self.nFc = PARAMS['nFc']
         self.k = PARAMS['k']
-        list_tags.append(f'k{self.k}_nSt{self.nSt}_nSc{self.nSc}_nFt{self.nFt}_nFc{self.nFc}')
-        list_tags.append('Sequential')
+        list_tags.append(f'{self.k}x{self.nSt}x{self.nSc}x{self.nFt}x{self.nFc}')
+        # list_tags.append('Sequential')
         list_tags.append(self.network_name)
         print('LIST TAGS:')
         print(list_tags)
@@ -857,16 +863,17 @@ class SequentialMetaLearningExp(Experiment):
             self.step = sequence_net_step
             self.lossfn = MSELoss()  #CrossEntropyLoss()
 
-        if network_name == 'sequence_Ntrain_1cand':
-            assert self.nSc == 1 and self.nFc == 1, "With the model Ntrain1cand you need to set nSc and nFc to 1"
+        elif network_name == 'seqNt1c':
+            assert self.nSc == 1 and self.nFc == 1, f"With the model {network_name} you need to set nSc and nFc to 1"
             net = SequenceNtrain1cand()
             self.step = sequence_net_Ntrain_1cand
             self.lossfn = MSELoss()  # CrossEntropyLoss()
-
+        else:
+            assert False, f"network name {network_name} not recognized"
         if pretraining != 'vanilla':
             if os.path.isfile(pretraining):
                 print(f"Pretraining value should be a path when used with FewShotLearning (not ImageNet, etc.). Instead is {pretraining}")
-            net.load_state_dict(pretraining)
+            net.load_state_dict(torch.load(pretraining, map_location=torch.device('cuda' if self.use_cuda else 'cpu')))
 
         print('***Network***')
         print(net)
@@ -901,6 +908,7 @@ class SequentialMetaLearningExp(Experiment):
                                                           nSc=testing_loader.dataset.sampler.nSc,
                                                           nFt=testing_loader.dataset.sampler.nFt,
                                                           nFc=testing_loader.dataset.sampler.nFc,
+                                                          task_type=testing_loader.dataset.sampler.task_type,
                                                           num_classes=self.k,
                                                           use_cuda=self.use_cuda,
                                                           network_name=self.network_name,
@@ -941,20 +949,23 @@ def few_shot_unity_builder_class(class_obj):
             self.name_datasets_testing = PARAMS['name_dataset_testing']
             if self.name_datasets_testing is None and self.name_dataset_training is None:
                 self.play_mode = True
-                self.name_datasets_testing = []
-            else:
-                if self.name_datasets_testing is None and self.name_dataset_training is not None:
-                    self.name_datasets_testing = self.name_dataset_training
+                self.name_dataset_training = None
+            list_tags.append(f"te{self.name_datasets_testing}") if self.name_datasets_testing is not None else None
+            list_tags.append(f"tr{self.name_dataset_training}") if self.name_dataset_training is not None else None
+
+            if self.name_datasets_testing is not None:
                 self.name_datasets_testing = str.split(self.name_datasets_testing, "_")
+            else:
+                self.name_datasets_testing = []
+
             self.size_canvas = PARAMS['size_canvas']
-            list_tags.append("Unity")
+            # list_tags.append("Unity")
+            list_tags.append('sc{}'.format(str(self.size_canvas).replace(', ', 'x'))) if self.size_canvas != '0' else None
+
             if self.size_canvas == '0':
-                self.size_canvas = None
-                # just for now
-                self.size_canvas = (64, 64)
+                self.size_canvas = (64, 64)  # ToDo: this could be taken from the unity channel
             else:
                 self.size_canvas = tuple([int(i) for i in self.size_canvas.split("_")])
-            list_tags.append('orsize' if self.size_canvas == '0' else 'sc{}'.format(str(self.size_canvas).replace(', ', 'x')))
             super().finalize_init(PARAMS, list_tags)
 
         def prepare_train_callbacks(self, log_text, train_loader):
@@ -972,30 +983,44 @@ def few_shot_unity_builder_class(class_obj):
             # AverageChangeMetric(loss_or_acc='acc',  use_cuda=self.use_cuda, log_every=nept_check_every, log_text='avrgChange/acc'),
             all_cb = super().prepare_train_callbacks(log_text, train_loader)
             ck = CheckStoppingLevel()
-            all_cb += [TriggerActionWithPatience(min_delta=0.01, patience=400, percentage=True, mode='max',
-                                                 reaching_goal=75,
+            all_cb += [PlotUnityImagesEveryOnceInAWhile(dataset=train_loader.dataset,
+                                                        plot_every=1000,
+                                                        plot_only_n_times=20),
+                       TriggerActionWithPatience(min_delta=0.01, patience=400, percentage=True, mode='max',
+                                                 reaching_goal=90,
                                                  metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
                                                  check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
                                                  triggered_action=ck.go_next_level)]
             return all_cb
+        def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
+            all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
+            all_cb += [
+                # StandardMetrics(log_every=1000, print_it=True,
+                #                       use_cuda=self.use_cuda,
+                #                       weblogger=0, log_text=log_text,
+                #                       metrics_prefix='cnsl'),
+                       PlotUnityImagesEveryOnceInAWhile(dataset=testing_loader.dataset,
+                                                        plot_every=1000,
+                                                        plot_only_n_times=5)]
+            return all_cb
     return UnityExp
 
 
-class FewShotLearningExpUnityMetaLearning(few_shot_unity_builder_class(FewShotLearningExp)):
-    def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
-        all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
-        if save_dataframe:
-            all_cb += [ComputeDataFrame3DmetaLearning(n=self.n,
-                                                      k=self.k,
-                                                      q=self.q,
-                                                      num_classes=self.k,
-                                                      use_cuda=self.use_cuda,
-                                                      network_name=self.network_name,
-                                                      size_canvas=self.size_canvas,
-                                                      log_text_plot=log_text,
-                                                      weblogger=self.weblogger,
-                                                      output_and_softmax=False)]
-        return all_cb
+# class FewShotLearningExpUnityMetaLearning(few_shot_unity_builder_class(FewShotLearningExp)):
+#     def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
+#         all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
+#         if save_dataframe:
+#             all_cb += [ComputeDataFrame3DmetaLearning(n=self.n,
+#                                                       k=self.k,
+#                                                       q=self.q,
+#                                                       num_classes=self.k,
+#                                                       use_cuda=self.use_cuda,
+#                                                       network_name=self.network_name,
+#                                                       size_canvas=self.size_canvas,
+#                                                       log_text_plot=log_text,
+#                                                       weblogger=self.weblogger,
+#                                                       output_and_softmax=False)]
+#         return all_cb
 
 
 sequence_unity_meta_learning_exp = few_shot_unity_builder_class(SequentialMetaLearningExp)
