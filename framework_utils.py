@@ -25,6 +25,7 @@ np.set_printoptions(linewidth=desired_width)
 pd.set_option("display.max.columns", None)
 pd.set_option("display.precision", 4)
 pd.set_option('display.width', desired_width)
+pd.set_option("expand_frame_repr", False) # print cols side by side as it's supposed to b
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -218,19 +219,19 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
 
     for i in range(num_batches_to_log):
         images, labels, more = next(iterator)
-        plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger)
+        plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, dataset.grayscale, weblogger)
     # if isinstance(dataset, UnityGenMetaLearning):
         # dataset.sampler.
 
 
-def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger=2):
+def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, grayscale, weblogger=2):
     from generate_datasets.generators.unity_metalearning_generator import UnityGenMetaLearning
     if isinstance(dataset, UnityGenMetaLearning):
         k, nSt, nFt, nSc, nFc, sc = dataset.sampler.k, dataset.sampler.nSt, dataset.sampler.nFt, dataset.sampler.nSc, dataset.sampler.nFc, dataset.size_canvas
         tot_frames_each_iter = (nSt * nFt) + (nSc * nFc)
-        all_c = images[:k * nSc * nFc].reshape(k, nSc * nFc, 3, *sc).numpy()
-        all_t = images[k * nSc * nFc:].reshape(k, nSt * nFt, 3, *sc).numpy()
-        plot_images = torch.tensor(np.array([np.vstack((i, j)) for i, j in zip(all_c, all_t)]).reshape(k * tot_frames_each_iter, 3, 64, 64))
+        all_c = images[:k * nSc * nFc].reshape(k, nSc * nFc, 3 if not grayscale else 1, *sc).numpy()
+        all_t = images[k * nSc * nFc:].reshape(k, nSt * nFt, 3 if not grayscale else 1, *sc).numpy()
+        plot_images = torch.tensor(np.array([np.vstack((i, j)) for i, j in zip(all_c, all_t)]).reshape(k * tot_frames_each_iter, 3 if not grayscale else 1 , 64, 64))
         # labels = ["" for i in range(len(images))]
         labels = ["" for i in range(k * (tot_frames_each_iter))]
         labels[:-1:(nSt * nFt) + (nSc * nFc)] = [str(i) for i in dataset.sampler.labels]
@@ -253,7 +254,7 @@ def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more,
                         for im, lb, n in zip(images, labels, add_text)]}, step=0)
     if weblogger == 2:
         [neptune.log_image(metric_str,
-                           convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'], text=f'{lb}' + os.path.splitext(n)[0]).astype(np.uint8)) for im, lb, n in zip(plot_images, labels, add_text)]
+                           convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'], text=f'{lb}' + os.path.splitext(n)[0])) for im, lb, n in zip(plot_images, labels, add_text)]
 
 
 def convert_pil_img_to_tensor(imageT, normalize):
@@ -334,12 +335,16 @@ def convert_normalized_tensor_to_plottable_array(tensor, mean, std, text):
     font = cv2.QT_FONT_NORMAL
     umat = cv2.UMat(image * 255)
     umat = cv2.putText(cv2.UMat(umat), text=text, org=(0, int(canvas_size[1] - 3)), fontFace=font, fontScale=font_scale, color=[0, 0, 0], lineType=cv2.LINE_AA, thickness=6)
-    umat = cv2.putText(img=cv2.UMat(umat), text=text, org=(0, int(canvas_size[1] -3)),
+    umat = cv2.putText(img=cv2.UMat(umat), text=text, org=(0, int(canvas_size[1] - 3)),
                 fontFace=font, fontScale=font_scale, color=[255, 255, 255], lineType=cv2.LINE_AA, thickness=1)
     # cv2.imshow('ciao', image)
     image = cv2.UMat.get(umat)
-    image = np.array(image, np.int8)
-    # plt.imshow(image)
+    # if len(image.shape) == 2 or (len(image.shape) == 3 and image.shape[2] == 1):
+    #     image = image / 255
+    # else:
+    image = np.array(image, np.uint8)
+
+    # plt.imshow(image, cmap='gray', vmin=0, vmax=1)
     return image
 
 
@@ -362,13 +367,15 @@ def imshow_batch(inp, stats=None, title_lab=None, title_more=''):
         std = stats['std']
     """Imshow for Tensor."""
     fig = plt.figure(1, facecolor='gray')
+    mng = plt.get_current_fig_manager()
+    mng.window.showMaximized()
     for idx, image in enumerate(inp):
         cols = np.min([5, len(inp)])
         image = conver_tensor_to_plot(image, mean, std)
         plt.subplot(int(np.ceil(np.shape(inp)[0]/cols)), cols, idx+1)
         plt.axis('off')
         if len(np.shape(image)) == 2:
-            plt.imshow(image, cmap='gray')
+            plt.imshow(image, cmap='gray', vmin=0, vmax=1)
         else:
             plt.imshow(image)
         if title_lab is not None and len(title_lab) > idx:

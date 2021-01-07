@@ -54,8 +54,10 @@ class Experiment(ABC):
         self.project_name = PARAMS['project_name']
         self.patience_stagnation = PARAMS['patience_stagnation']
         self.experiment_name = PARAMS['experiment_name']
+        self.grayscale = bool(PARAMS['grayscale'])
         self.experiment_data = {}
         self.experiment_loaders = {}  # we separate data from loaders because loaders are pickled objects and may broke when module name changes. If this happens, at least we preserve the data. We generally don't even need the loaders much.
+
 
         self.weblog_check_every = 5
         self.console_check_every = 100
@@ -71,7 +73,7 @@ class Experiment(ABC):
         list_tags.append('ptImageNet') if self.pretraining == 'ImageNet' else None
         list_tags.append(self.network_name)
         list_tags.append('lr{}'.format("{:2f}".format(self.learning_rate).split(".")[1])) if self.learning_rate is not None else None
-
+        list_tags.append('gray') if self.grayscale else None
         if self.max_iterations is None:
             self.max_iterations = 5000 if self.use_cuda else 10
 
@@ -89,6 +91,10 @@ class Experiment(ABC):
                             default=1)
         parser.add_argument("-fcuda", "--force_cuda",
                             help="Force to run it with cuda enabled (for testing)",
+                            type=int,
+                            default=0)
+        parser.add_argument("-grayscale", "--grayscale",
+                            help="Set the grayscale flag to true",
                             type=int,
                             default=0)
         parser.add_argument("-weblog", "--use_weblog",
@@ -180,7 +186,7 @@ class Experiment(ABC):
         pass
 
     @abstractmethod
-    def get_net(self, network_name, num_classes, pretraining, grayscale):
+    def get_net(self, network_name, num_classes, pretraining):
         return None, None
 
     def prepare_train_callbacks(self, log_text, train_loader):
@@ -231,8 +237,7 @@ class Experiment(ABC):
         self.experiment_loaders[self.current_run]['training'].append(train_loader)
         self.net, params_to_update = self.get_net(self.network_name,
                                                   num_classes=self._get_num_classes(train_loader),
-                                                  pretraining=self.pretraining,
-                                                  grayscale=False)
+                                                  pretraining=self.pretraining)
         all_cb = self.prepare_train_callbacks(log_text, train_loader)
 
         all_cb += (callbacks or [])
@@ -249,7 +254,14 @@ class Experiment(ABC):
         self.experiment_data[self.current_run]['id_text'] = id_text
 
     def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
-        all_cb = [StopFromUserInput(),
+        all_cb = [
+            StandardMetrics(log_every=500, print_it=True,
+                                  use_cuda=self.use_cuda,
+                                  weblogger=0, log_text=log_text,
+                                  metrics_prefix='cnsl'),
+                  PlotTimeElapsed(time_every=500),
+
+                  StopFromUserInput(),
                   StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
                                       to_weblog=self.weblogger, log_text=log_text)]
@@ -272,7 +284,7 @@ class Experiment(ABC):
         # df_testing = pd.DataFrame([])
         for idx, testing_loader in enumerate(test_loaders_list):
             # print('Testing on [{}], [{}]'.format(testing_loader.dataset.name_generator, testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no translation'))
-            print(f'Testing {idx+1}/{len(test_loaders_list)}: [{testing_loader.dataset.name_generator}]')
+            print(f'Testing {idx+1}/{len(test_loaders_list)}: [{testing_loader.dataset.name_generator}]: {np.min((self.num_iterations_testing, len(testing_loader.dataset)))}')
             # testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no transl'
             all_cb = self.prepare_test_callbacks(log_text[idx] if log_text is not None else '', testing_loader, save_dataframe)
             all_cb += (callbacks or [])
@@ -402,11 +414,11 @@ class SupervisedLearningExperiment(Experiment):
                    epochs=epochs
                    )
 
-    def get_net(self, network_name, num_classes, pretraining, grayscale=False):
+    def get_net(self, network_name, num_classes, pretraining):
         net, params_to_update = self.prepare_network(network_name,
                                                      num_classes=num_classes,
                                                      is_server=self.use_cuda,
-                                                     grayscale=grayscale,
+                                                     grayscale=self.grayscale,
                                                      use_gap=self.use_gap,
                                                      feature_extraction=self.feature_extraction,
                                                      pretraining=pretraining,
@@ -453,7 +465,7 @@ class SupervisedLearningExperiment(Experiment):
         isnp = re.findall(r'nopool', pretrain_path)
         find_NP = bool(isnp[0]) if isnp else False
 
-        # Grayscale not implemented: grayscale is assumed to be FALSE at all time
+        # Grayscale not implemented
         if type_net == TypeNet.SMALL_CNN:
             if find_NP:
                 if find_sFC:
@@ -739,12 +751,12 @@ class FewShotLearningExp(Experiment):
         print(list_tags)
         super().finalize_init(PARAMS, list_tags)
 
-    def get_net(self, network_name, num_classes, pretraining, grayscale=False):
+    def get_net(self, network_name, num_classes, pretraining):
         # ToDo: Matching Learning pretrain
         device = torch.device('cuda' if self.use_cuda else 'cpu')
         if network_name == 'matching_net_basic':
             net = MatchingNetwork(self.n, self.k, self.q, fce=False,
-                                  num_input_channels=1 if grayscale else 3,
+                                  num_input_channels=1 if self.grayscale else 3,
                                   lstm_layers=0,
                                   lstm_input_size=0,
                                   unrolling_steps=0,
@@ -855,19 +867,19 @@ class SequentialMetaLearningExp(Experiment):
         print(list_tags)
         super().finalize_init(PARAMS, list_tags)
 
-    def get_net(self, network_name, num_classes, pretraining, grayscale=False):
+    def get_net(self, network_name, num_classes, pretraining):
         # ToDo: Matching Learning pretrain
         device = torch.device('cuda' if self.use_cuda else 'cpu')
-        if network_name == 'sequence_1':
-            net = SequenceMatchingNetSimple()
-            self.step = sequence_net_step
-            self.lossfn = MSELoss()  #CrossEntropyLoss()
-
-        elif network_name == 'seqNt1c':
+        if network_name == 'seqNt1c':
             assert self.nSc == 1 and self.nFc == 1, f"With the model {network_name} you need to set nSc and nFc to 1"
-            net = SequenceNtrain1cand()
+            net = SequenceNtrain1cand(grayscale=self.grayscale)
             self.step = sequence_net_Ntrain_1cand
             self.lossfn = MSELoss()  # CrossEntropyLoss()
+        elif network_name == 'relation_net':
+            assert self.nSc == 1 and self.nFc == 1 and self.nSt == 1 and self.nFt == 1
+            net = RelationNetSung(size_canvas=self.size_canvas, grayscale=self.grayscale)
+            self.step = sequence_net_Ntrain_1cand
+            self.lossfn = MSELoss()
         else:
             assert False, f"network name {network_name} not recognized"
         if pretraining != 'vanilla':
@@ -908,7 +920,7 @@ class SequentialMetaLearningExp(Experiment):
                                                           nSc=testing_loader.dataset.sampler.nSc,
                                                           nFt=testing_loader.dataset.sampler.nFt,
                                                           nFc=testing_loader.dataset.sampler.nFc,
-                                                          task_type=testing_loader.dataset.sampler.task_type,
+                                                          task_type=testing_loader.dataset.sampler.trial_type,
                                                           num_classes=self.k,
                                                           use_cuda=self.use_cuda,
                                                           network_name=self.network_name,
@@ -950,6 +962,9 @@ def few_shot_unity_builder_class(class_obj):
             if self.name_datasets_testing is None and self.name_dataset_training is None:
                 self.play_mode = True
                 self.name_dataset_training = None
+            if self.output_filename is None and self.name_datasets_testing is not None:
+                assert False, "You provided some dataset for testing, but no output. This is almost always a mistake"
+
             list_tags.append(f"te{self.name_datasets_testing}") if self.name_datasets_testing is not None else None
             list_tags.append(f"tr{self.name_dataset_training}") if self.name_dataset_training is not None else None
 
@@ -984,6 +999,7 @@ def few_shot_unity_builder_class(class_obj):
             all_cb = super().prepare_train_callbacks(log_text, train_loader)
             ck = CheckStoppingLevel()
             all_cb += [PlotUnityImagesEveryOnceInAWhile(dataset=train_loader.dataset,
+                                                        grayscale=self.grayscale,
                                                         plot_every=1000,
                                                         plot_only_n_times=20),
                        TriggerActionWithPatience(min_delta=0.01, patience=400, percentage=True, mode='max',
@@ -994,12 +1010,8 @@ def few_shot_unity_builder_class(class_obj):
             return all_cb
         def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
             all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
-            all_cb += [
-                # StandardMetrics(log_every=1000, print_it=True,
-                #                       use_cuda=self.use_cuda,
-                #                       weblogger=0, log_text=log_text,
-                #                       metrics_prefix='cnsl'),
-                       PlotUnityImagesEveryOnceInAWhile(dataset=testing_loader.dataset,
+            all_cb += [PlotUnityImagesEveryOnceInAWhile(dataset=testing_loader.dataset,
+                                                        grayscale=self.grayscale,
                                                         plot_every=1000,
                                                         plot_only_n_times=5)]
             return all_cb

@@ -5,6 +5,7 @@ import torch
 from models.model_utils import Flatten, conv_block
 import torch.nn.functional as F
 import numpy as np
+from framework_utils import make_cuda
 
 
 class EncoderRNN(nn.Module):
@@ -30,7 +31,7 @@ class SequenceNtrain1cand(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
-    def __init__(self):
+    def __init__(self, grayscale=False):
         super().__init__()
         size_embedding_frame = 64
         # self.image_embedding_trainings = nn.Sequential(conv_block(3, 64, bias=False, batch_norm=False),
@@ -39,10 +40,10 @@ class SequenceNtrain1cand(nn.Module):
         #                                      conv_block(64, 64, bias=False, batch_norm=False),
         #                                      nn.AdaptiveAvgPool2d(1),
         #                                      Flatten())  # output = 1 x 64
-        self.image_embedding_candidates = nn.Sequential(conv_block(3, 64, bias=True),
-                                                      conv_block(64, 64, bias=True),
-                                                      conv_block(64, 64, bias=True),
-                                                      conv_block(64, 64, bias=True),
+        self.image_embedding_candidates = nn.Sequential(conv_block(1 if grayscale else 3, 64),
+                                                      conv_block(64, 64),
+                                                      conv_block(64, 64),
+                                                      conv_block(64, 64),
                                                       nn.AdaptiveAvgPool2d(1),
                                                       Flatten())  # output = 1 x 64
 
@@ -53,6 +54,7 @@ class SequenceNtrain1cand(nn.Module):
         # self.encoder_seq2obj = EncoderRNN(input_size=hidden_size, hidden_size=hidden_size)
 
         self.relation_net = nn.Sequential(nn.Linear(64, 256),
+                                          nn.ReLU(True),
                                           nn.BatchNorm1d(256),
                                           nn.Linear(256, 8),
                                           nn.ReLU(True),
@@ -61,8 +63,19 @@ class SequenceNtrain1cand(nn.Module):
 
         self._initialize_weights()
 
-    def forward(self, frame, hidden):
-        pass
+    def forward(self, input):
+        x, k, nSt, nFt, use_cuda = input
+        fr_hidden = make_cuda(torch.randn(1, k, self.encoder_fr2seq.hidden_size), use_cuda)
+
+        emb_all = self.image_embedding_candidates(x)
+        emb_candidates = emb_all[:k]  # this only works for nSc and nFc = 1!
+        emb_trainings = emb_all[k:]
+        emb_sequence_batch = emb_trainings.reshape(k, nSt * nFt, 64)
+
+        out, h = self.encoder_fr2seq(emb_sequence_batch, fr_hidden)
+
+        relation_scores = self.relation_net(torch.abs(emb_candidates - h.squeeze(0)))
+        return relation_scores
 
 
 class SequenceMatchingNetSimple(nn.Module):

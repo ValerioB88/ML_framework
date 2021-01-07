@@ -583,14 +583,9 @@ class Metrics(Callback):
 
     def update_classic_logs(self, batch_logs):
         self.correct_train += ((batch_logs['y_pred'].cuda() if self.use_cuda else batch_logs['y_pred']) ==
-                               (batch_logs['y_true'].cuda() if self.use_cuda else batch_logs['y_true'])).sum().item()
+                                (batch_logs['y_true'].cuda() if self.use_cuda else batch_logs['y_true'])).sum().item()
         self.total_samples += batch_logs['y_true'].size(0)
 
-
-    # def update_classic_logs_few_shots(self, batch_logs):
-    #     self.correct_train += ((batch_logs['y_pred_real_lab'].cuda() if self.use_cuda else batch_logs['y_pred_real_lab']) ==
-    #                            (batch_logs['y_true_real_lab'].cuda() if self.use_cuda else batch_logs['y_true_real_lab'])).sum().item()
-    #     self.total_samples += batch_logs['y_true_real_lab'].size(0)
 
 class RunningMetrics(Metrics):
     def __init__(self, use_cuda, log_every, log_text=''):
@@ -605,7 +600,7 @@ class RunningMetrics(Metrics):
     def compute_mean_loss_acc(self):
         mean_loss = self.running_loss / self.log_every
         mean_acc = 100 * self.correct_train / self.total_samples
-        return mean_loss.item(), mean_acc
+        return mean_loss, mean_acc
 
     def init_classic_logs(self):
         self.correct_train, self.total_samples, self.running_loss = 0, 0, 0
@@ -636,7 +631,6 @@ class StandardMetrics(RunningMetrics):
 
 
     def on_training_step_end(self, batch_index, batch_logs=None):
-        super().on_batch_end(batch_index, batch_logs)
         self.update_classic_logs(batch_logs)
         if batch_index % self.log_every == self.log_every - 1:
             batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc()
@@ -786,7 +780,7 @@ class PlotTimeElapsed(Callback):
 
     def on_batch_end(self, batch, logs=None):
         if batch % self.time_every == 0:
-            print('Time Elapsed {} iter: {}'.format(self.time_every, time() - self.start_time))
+            print(f'{logs["tot_iter"]} - Time Elapsed {self.time_every} iter: { time() - self.start_time}')
             self.start_time = time()
 
 
@@ -828,7 +822,7 @@ class ComputeDataFrame(Callback):
         return []
 
     def _compute_and_log_metrics(self, data_frame):
-        pass
+        return data_frame
 
     def on_training_step_end(self, batch, logs=None):
         output_batch_t = logs['output']
@@ -883,17 +877,21 @@ class ComputeDataFrame(Callback):
 class PlotUnityImagesEveryOnceInAWhile(Callback):
     counter = 0
 
-    def __init__(self, dataset, plot_every=100, plot_only_n_times=5):
+    def __init__(self, dataset, grayscale, plot_every=100, plot_only_n_times=5):
         self.dataset= dataset
+        self.grayscale = grayscale
         self.plot_every = plot_every
         self.plot_only_n_times = plot_only_n_times
 
     def on_training_step_end(self, batch, logs=None):
         if logs['tot_iter'] % self.plot_every == self.plot_every - 1 and self.counter < self.plot_only_n_times:
-            framework_utils.plot_images_on_weblogger(self.dataset, self.dataset.name_generator, self.dataset.stats, logs['images'], None, None, f"ITER {logs['tot_iter']}")
+            framework_utils.plot_images_on_weblogger(self.dataset, self.dataset.name_generator, self.dataset.stats,
+                                                     images=logs['images'], labels=None, more=None,
+                                                     log_text=f"ITER {logs['tot_iter']}",
+                                                     grayscale=self.grayscale)
             self.counter += 1
 
-from generate_datasets.generators.unity_metalearning_generator import TaskType
+from generate_datasets.generators.unity_metalearning_generator import TrialType
 
 class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
     def __init__(self, k, nSt, nSc, nFt, nFc, task_type, *args, **kwargs):
@@ -904,7 +902,7 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
         self.nFt = nFt
         self.nFc = nFc
         self.task_type = task_type
-        self.additional_logs_names = ['task_num', 'objC', 'objT',  'candidate_campos_XYZ', 'training_campos_XYZ',]
+        self.additional_logs_names = ['task_num', 'objC', 'objT',  'candidate_campos_XYZ', 'training_campos_XYZ', 'rel_score']
         self.column_names.extend(self.additional_logs_names)
         self.camera_positions_batch = None
         self.is_support = None
@@ -937,18 +935,22 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
                 around = 0
             if azimuth < 0:
                 azimuth += 360
-
             row['azimuth'] = azimuth
             row['around'] = around  # this is not really "inclination" - inclination goes from 0 to 180. This goes from 0 when aligned with the horizontal plane, and then it goes all around
             return row
-        if self.task_type == TaskType.TRAIN:
+
+        comp_az_or = False
+        if self.task_type == TrialType.RND_TRIAL:
             type = ''
-        elif self.task_type == TaskType.TEST_ORTHOGONAL:
+        elif self.task_type == TrialType.DET_TRIAL_EDELMAN_ORTHOGONAL:
             type = 'orthogonal'
-        elif self.task_type == TaskType.TEST_SAME_AXIS:
+            comp_az_or = True
+        elif self.task_type == TrialType.DET_TRIAL_EDELMAN_SAME_AXIS:
+            comp_az_or = True
             type = 'same'
-        print("Computing axes...")
-        data_frame = data_frame.apply(lambda row: convert_to_azi(row, type=type), axis=1)
+        if comp_az_or:
+            print("Computing azimuth and orthogonal...")
+            data_frame = data_frame.apply(lambda row: convert_to_azi(row, type=type), axis=1)
         return data_frame
 
     def _get_additional_logs(self, logs, sample_index):
@@ -986,7 +988,8 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
 #################################################################
         add_logs = [self.task_num,
                     logs['labels'][sample_index][0].item(), logs['labels'][sample_index][1].item(),
-                    np.array([unity2python(i) for i in camera_positions_candidates]), np.array([unity2python(i) for i in camera_positions_trainings])]
+                    np.array([unity2python(i) for i in camera_positions_candidates]), np.array([unity2python(i) for i in camera_positions_trainings]),
+                    logs['output'][sample_index].item()]
 
         return add_logs
 
@@ -1006,6 +1009,7 @@ class ComputeDataFrame3DmetaLearning(ComputeDataFrame):
         if self.weblogger == 2:
             neptune.log_image(metric_str, mplt_fig)
             log_chart(f'{self.log_text_plot} {metric_str}', plotly_fig)
+        return data_frame
 
 
 class ComputeDataFrame2D(ComputeDataFrame):
@@ -1085,7 +1089,7 @@ class ComputeDataFrame2D(ComputeDataFrame):
                 neptune.log_image(metric_str, fig)
             plt.close()
             plt.close()
-
+        return data_frame
 
 class PlotGradientWeblog(Callback):
     grad = []

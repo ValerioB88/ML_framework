@@ -5,6 +5,8 @@ import torch
 from models.model_utils import Flatten, conv_block
 import torch.nn.functional as F
 import numpy as np
+from framework_utils import make_cuda
+
 
 
 def get_few_shot_encoder_basic(num_input_channels=1) -> nn.Module:
@@ -54,22 +56,34 @@ def get_few_shot_encoder(num_input_channels=1, output=64, flatten=True) -> nn.Mo
 
 
 class RelationNetSung(nn.Module):
-    def __init__(self, output_encoder=64, size_canvas=(224, 224), n_shots=1):
+    def __init__(self, output_encoder=64, size_canvas=(224, 224), n_shots=1, grayscale=False):
         super().__init__()
-        flatten_size = (np.multiply(*np.array(size_canvas) / np.power(2, 6)) * 64).astype(int)
+        # flatten_size = (np.multiply(*np.array(size_canvas) / np.power(2, 6)) * 64).astype(int)
 
-        self.encoder = nn.Sequential(conv_block(3, 64),
+        self.image_embedding_candidates = nn.Sequential(conv_block(1 if grayscale else 3, 64),
                        conv_block(64, 64),
-                       conv_block(64, 64, max_pool=True),
-                       conv_block(64, output_encoder, max_pool=True))
+                       # conv_block(64, 64),
+                       conv_block(64, output_encoder))
 
         self.relation_net = nn.Sequential(conv_block(n_shots * output_encoder + output_encoder, 64),
-                            conv_block(64, 64),
+                            # conv_block(64, 64),
+                            nn.AdaptiveAvgPool2d(1),
                             Flatten(),
-                            nn.Linear(flatten_size, 8),
+                            nn.Linear(64, 256),
+                            nn.ReLU(True),
+                            # nn.BatchNorm1d(256), # it doesn't work because during training we have only 1 sample and obviously it needs to be > 1
+                            nn.Linear(256, 8),
                             nn.ReLU(True),
                             nn.Linear(8, 1),
                             nn.Sigmoid())
+
+    def forward(self, input):
+        ## ToDo: Make it more general, or at least for training frames/sequence > 1!
+        x, k, nSt, nFt, use_cuda = input
+        emb_all = self.image_embedding_candidates(x)
+        emb_candidates = emb_all[:k]  # this only works for nSt, nFt, nSc and nFc = 1!
+        emb_trainings = emb_all[k:]
+        return self.relation_net(torch.cat((emb_candidates, emb_trainings), dim=1))
 
 
 class MatchingNetwork(nn.Module):
