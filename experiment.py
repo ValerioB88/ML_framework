@@ -68,7 +68,7 @@ class Experiment(ABC):
         list_tags = []
         if self.additional_tags is not None:
             [list_tags.append(i) for i in self.additional_tags.split('_') if i != 'emptytag']
-        list_tags.extend(additional_tags)
+        list_tags.extend(additional_tags) if additional_tags is not None else None
         list_tags.append('ptvanilla') if self.pretraining == 'vanilla' else None
         list_tags.append('ptImageNet') if self.pretraining == 'ImageNet' else None
         list_tags.append(self.network_name)
@@ -255,11 +255,11 @@ class Experiment(ABC):
 
     def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
         all_cb = [
-            StandardMetrics(log_every=500, print_it=True,
+            StandardMetrics(log_every=3000, print_it=True,
                                   use_cuda=self.use_cuda,
                                   weblogger=0, log_text=log_text,
                                   metrics_prefix='cnsl'),
-                  PlotTimeElapsed(time_every=500),
+                  PlotTimeElapsed(time_every=3000),
 
                   StopFromUserInput(),
                   StopWhenMetricIs(value_to_reach=self.num_iterations_testing, metric_name='tot_iter'),
@@ -788,8 +788,9 @@ class FewShotLearningExp(Experiment):
             assert False, "Name network not recognized"
 
         if pretraining != 'vanilla':
-            if os.path.isfile(pretraining):
+            if not os.path.isfile(pretraining):
                 print(f"Pretraining value should be a path when used with FewShotLearning (not ImageNet, etc.). Instead is {pretraining}")
+                assert False
             net.load_state_dict(pretraining)
 
         print('***Network***')
@@ -1016,23 +1017,6 @@ def few_shot_unity_builder_class(class_obj):
                                                         plot_only_n_times=5)]
             return all_cb
     return UnityExp
-
-
-# class FewShotLearningExpUnityMetaLearning(few_shot_unity_builder_class(FewShotLearningExp)):
-#     def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
-#         all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
-#         if save_dataframe:
-#             all_cb += [ComputeDataFrame3DmetaLearning(n=self.n,
-#                                                       k=self.k,
-#                                                       q=self.q,
-#                                                       num_classes=self.k,
-#                                                       use_cuda=self.use_cuda,
-#                                                       network_name=self.network_name,
-#                                                       size_canvas=self.size_canvas,
-#                                                       log_text_plot=log_text,
-#                                                       weblogger=self.weblogger,
-#                                                       output_and_softmax=False)]
-#         return all_cb
 
 
 sequence_unity_meta_learning_exp = few_shot_unity_builder_class(SequentialMetaLearningExp)

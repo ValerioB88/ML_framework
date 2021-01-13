@@ -99,11 +99,11 @@ def align_vectors(a, b):
 
 def from_dataframe_to_3D_scatter(dataframe, title):
     # Compute Distance Between Query and average support
-    query_campos = np.array([i for i in dataframe['query_campos_XYZ']])
-    support_campos = np.array([np.mean(i, axis=0) for i in dataframe['support_campos_XYZ']])
+    candidate_campos = np.array([np.mean(i.reshape(-1, 3), axis=0) for i in dataframe['candidate_campos_XYZ']])
+    training_campos = np.array([np.mean(i.reshape(-1, 3), axis=0) for i in dataframe['training_campos_XYZ']])
     correct = [i for i in dataframe['is_correct']]
 
-    aligned_all_vectors = np.array([align_vectors(q, s) for q, s in zip(query_campos, support_campos)])
+    aligned_all_vectors = np.array([align_vectors(q, s) for q, s in zip(candidate_campos, training_campos)])
     aligned_norm_vect = np.array([i / np.linalg.norm(i) for i in aligned_all_vectors])
     mplt_colors = ['r' if i is False else 'b' for i in correct]
     plotly_colors = ['y' if i is False else 'b' for i in correct]

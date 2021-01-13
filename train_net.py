@@ -79,6 +79,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
     nFc = dataset.sampler.nFc
     nFt = dataset.sampler.nFt
     y_matching_labels = dataset.sampler.labels
+
     camera_positions = dataset.sampler.camera_positions
 
     if train:

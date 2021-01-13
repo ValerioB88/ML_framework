@@ -909,9 +909,10 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
         self.task_num = None
 
     def _compute_and_log_metrics(self, data_frame):
-        def convert_to_azi(row, type):
+        def convert_to_azi(row, type, training_camera_idx):
+            ## This won't really be super useful in ALL cases. For the caniddate camera, we only take the first one. And we always take the first sequence.
             a = row['candidate_campos_XYZ'][0][0]
-            b = row['training_campos_XYZ'][0][1]
+            b = row['training_campos_XYZ'][0][training_camera_idx]
 
             def get_incl_and_azi(a):
                 # must be unit vector
@@ -922,6 +923,9 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
 
             inclination = int(np.round(np.rad2deg(get_incl_and_azi(a)[0] - get_incl_and_azi(b)[0])))
             azimuth = int(np.round(np.rad2deg(-(get_incl_and_azi(a)[1] - get_incl_and_azi(b)[1]))))
+            aligned_inclination = inclination
+
+            around = 0
 
             if type == 'orthogonal':
                 if np.abs(azimuth) == 180:
@@ -935,22 +939,28 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
                 around = 0
             if azimuth < 0:
                 azimuth += 360
+
             row['azimuth'] = azimuth
             row['around'] = around  # this is not really "inclination" - inclination goes from 0 to 180. This goes from 0 when aligned with the horizontal plane, and then it goes all around
+            row['inclination'] = aligned_inclination  # this is the real inclination, aligned with the vertical axis (when pointig up is 0, down is 180).
             return row
 
-        comp_az_or = False
-        if self.task_type == TrialType.RND_TRIAL:
-            type = ''
-        elif self.task_type == TrialType.DET_TRIAL_EDELMAN_ORTHOGONAL:
+        # comp_az_or = False
+        comp_az_or = True
+
+        if self.task_type == TrialType.DET_TRIAL_EDELMAN_ORTHO_HOR:
             type = 'orthogonal'
-            comp_az_or = True
-        elif self.task_type == TrialType.DET_TRIAL_EDELMAN_SAME_AXIS:
-            comp_az_or = True
+            training_camera_idx = 1
+        elif self.task_type == TrialType.DET_TRIAL_EDELMAN_SAME_AXIS_HOR:
+            training_camera_idx = 1
             type = 'same'
+        else:
+            type = ''
+            training_camera_idx = 0
         if comp_az_or:
             print("Computing azimuth and orthogonal...")
-            data_frame = data_frame.apply(lambda row: convert_to_azi(row, type=type), axis=1)
+            data_frame = data_frame.apply(lambda row: convert_to_azi(row, type=type, training_camera_idx=training_camera_idx), axis=1)
+            print("done")
         return data_frame
 
     def _get_additional_logs(self, logs, sample_index):
