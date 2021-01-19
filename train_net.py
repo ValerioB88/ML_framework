@@ -64,6 +64,7 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
                    make_cuda(labels, use_cuda))
     logs['output'] = output_batch
     logs['more'] = more
+    logs['images'] = images
 
     max_output, predicted = torch.max(output_batch, 1)
     if train:
@@ -82,6 +83,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
 
     camera_positions = dataset.sampler.camera_positions
 
+    # print(f"IS CUDA: {next(model.parameters()).is_cuda}")
     if train:
         model.train()
         optimizer.zero_grad()

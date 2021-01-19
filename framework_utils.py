@@ -15,17 +15,18 @@ import plotly.graph_objects as go
 from scipy.spatial.transform import Rotation
 from matplotlib.patches import FancyArrowPatch
 from mpl_toolkits.mplot3d import proj3d
+from collections import namedtuple
+import cloudpickle
 
-
-from generate_datasets.generators.translate_generator import TranslateGenerator
 from generate_datasets.generators.input_image_generator import InputImagesGenerator
 import wandb
-desired_width = 380
+desired_width = 420
 np.set_printoptions(linewidth=desired_width)
 pd.set_option("display.max.columns", None)
 pd.set_option("display.precision", 4)
 pd.set_option('display.width', desired_width)
 pd.set_option("expand_frame_repr", False) # print cols side by side as it's supposed to b
+pd.set_option("display.max_rows", None, "display.max_columns", None)
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -166,6 +167,8 @@ def remap_value(x, range_source, range_target):
 
 
 def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1, num_batches_to_log=2):
+    from generate_datasets.generators.translate_generator import TranslateGenerator
+
     stats = {}
     compute_my_generator_info = False
     if isinstance(dataloader.dataset, InputImagesGenerator):
@@ -229,9 +232,12 @@ def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more,
     if isinstance(dataset, UnityGenMetaLearning):
         k, nSt, nFt, nSc, nFc, sc = dataset.sampler.k, dataset.sampler.nSt, dataset.sampler.nFt, dataset.sampler.nSc, dataset.sampler.nFc, dataset.size_canvas
         tot_frames_each_iter = (nSt * nFt) + (nSc * nFc)
-        all_c = images[:k * nSc * nFc].reshape(k, nSc * nFc, 3 if not grayscale else 1, *sc).numpy()
-        all_t = images[k * nSc * nFc:].reshape(k, nSt * nFt, 3 if not grayscale else 1, *sc).numpy()
-        plot_images = torch.tensor(np.array([np.vstack((i, j)) for i, j in zip(all_c, all_t)]).reshape(k * tot_frames_each_iter, 3 if not grayscale else 1 , 64, 64))
+        all_c = images[:k * nSc * nFc].reshape(k, nSc * nFc, images.shape[1], *sc).numpy()
+        all_t = images[k * nSc * nFc:].reshape(k, nSt * nFt, images.shape[1], *sc).numpy()
+        if all_c.size != 0:
+            plot_images = torch.tensor(np.array([np.vstack((i, j)) for i, j in zip(all_c, all_t)]).reshape(k * tot_frames_each_iter, all_t.shape[2] , 128, 128))
+        else:
+            plot_images = torch.tensor(np.array([i for i in all_t]).reshape(k * tot_frames_each_iter, all_t.shape[2], 128, 128))
         # labels = ["" for i in range(len(images))]
         labels = ["" for i in range(k * (tot_frames_each_iter))]
         labels[:-1:(nSt * nFt) + (nSc * nFc)] = [str(i) for i in dataset.sampler.labels]
@@ -256,6 +262,23 @@ def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more,
         [neptune.log_image(metric_str,
                            convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'], text=f'{lb}' + os.path.splitext(n)[0])) for im, lb, n in zip(plot_images, labels, add_text)]
 
+class TwoWaysDict(dict):
+    def __setitem__(self, key, value):
+        # Remove any previous connections with these values
+        if key in self:
+            del self[key]
+        if value in self:
+            del self[value]
+        dict.__setitem__(self, key, value)
+        dict.__setitem__(self, value, key)
+
+    def __delitem__(self, key):
+        dict.__delitem__(self, self[key])
+        dict.__delitem__(self, key)
+
+    def __len__(self):
+        """Returns the number of connections"""
+        return dict.__len__(self) // 2
 
 def convert_pil_img_to_tensor(imageT, normalize):
     """
@@ -327,6 +350,36 @@ def convert_normalized_tensor_to_plottable_figure(tensor, mean, std, title_lab=N
     plt.close(fig)
     return fig
 
+LAYOUT = []
+
+def save_figure_layout(filename=None):
+    global LAYOUT
+    figt = namedtuple('figure', 'num size position')
+    fignums = plt.get_fignums()
+    LAYOUT = []
+    for i in fignums:
+        fig = plt.figure(i)
+        size = plt.get_current_fig_manager().window.size()
+        pos = plt.get_current_fig_manager().window.pos()
+        LAYOUT.append(figt(i, [size.width(), size.height()], [pos.x(), pos.y()]))
+    if filename is not None:
+        cloudpickle.dump(LAYOUT, open(filename, 'wb'))
+    return LAYOUT
+
+
+def load_figure_layout(filename=None, offset=0):
+    global LAYOUT
+    if filename is not None:
+        LAYOUT = cloudpickle.load(open(filename, "rb"))
+
+    for i in range(len(LAYOUT)):
+        fig = plt.figure(LAYOUT[i].num + offset)
+        plt.get_current_fig_manager().window.setGeometry(*LAYOUT[i].position, *LAYOUT[i].size)
+        plt.get_current_fig_manager().window.activateWindow()
+        plt.get_current_fig_manager().window.show()
+
+
+
 
 def convert_normalized_tensor_to_plottable_array(tensor, mean, std, text):
     image = conver_tensor_to_plot(tensor, mean, std)
@@ -358,7 +411,7 @@ def conver_tensor_to_plot(tensor, mean, std):
     return image
 
 
-def imshow_batch(inp, stats=None, title_lab=None, title_more=''):
+def imshow_batch(inp, stats=None, title_lab=None, title_more='', maximize=True, ax=None):
     if stats is None:
         mean = np.array([0.5, 0.5, 0.5])
         std = np.array([0.5, 0.5, 0.5])
@@ -366,27 +419,32 @@ def imshow_batch(inp, stats=None, title_lab=None, title_more=''):
         mean = stats['mean']
         std = stats['std']
     """Imshow for Tensor."""
-    fig = plt.figure(1, facecolor='gray')
+
+    cols = np.min([5, len(inp)])
+    if ax is None:
+        fig = plt.figure(facecolor='gray')
+        fig, ax = plt.subplots(int(np.ceil(np.shape(inp)[0] / cols)), cols)
+    if not isinstance(ax, np.ndarray):
+        ax = np.array(ax)
     mng = plt.get_current_fig_manager()
-    mng.window.showMaximized()
+    mng.window.showMaximized() if maximize else None
     for idx, image in enumerate(inp):
-        cols = np.min([5, len(inp)])
         image = conver_tensor_to_plot(image, mean, std)
-        plt.subplot(int(np.ceil(np.shape(inp)[0]/cols)), cols, idx+1)
-        plt.axis('off')
+        ax[idx].clear()
+        ax[idx].axis('off')
         if len(np.shape(image)) == 2:
-            plt.imshow(image, cmap='gray', vmin=0, vmax=1)
+            ax[idx].imshow(image, cmap='gray', vmin=0, vmax=1)
         else:
-            plt.imshow(image)
+            ax[idx].imshow(image)
         if title_lab is not None and len(title_lab) > idx:
             if isinstance(title_lab[idx], torch.Tensor):
                 t = title_lab[idx].item()
             else:
                 t = title_lab[idx]
-            plt.title(str(title_lab[idx]) + ' ' + (title_more[idx] if title_more != '' else ''))
+            ax[idx].set_title(str(title_lab[idx]) + ' ' + (title_more[idx] if title_more != '' else ''))
     plt.pause(0.1)
     plt.tight_layout()
-    return fig
+    return ax
 
 
 def interpolate_grid(canvas):

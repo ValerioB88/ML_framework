@@ -66,16 +66,20 @@ class RelationNetSung(nn.Module):
                        conv_block(64, output_encoder))
 
         self.relation_net = nn.Sequential(conv_block(n_shots * output_encoder + output_encoder, 64),
-                            # conv_block(64, 64),
-                            nn.AdaptiveAvgPool2d(1),
-                            Flatten(),
-                            nn.Linear(64, 256),
-                            nn.ReLU(True),
-                            # nn.BatchNorm1d(256), # it doesn't work because during training we have only 1 sample and obviously it needs to be > 1
-                            nn.Linear(256, 8),
-                            nn.ReLU(True),
-                            nn.Linear(8, 1),
-                            nn.Sigmoid())
+                                          conv_block(64, 64),
+                                          conv_block(64, 64),
+                                          nn.AdaptiveAvgPool2d(1),
+                                          Flatten(),
+                                          nn.Linear(64, 256),
+                                          nn.ReLU(True),
+                                          nn.BatchNorm1d(256), # it doesn't work because during training we have only 1 sample and obviously it needs to be > 1
+                                          nn.Linear(256, 256),
+                                          nn.ReLU(True),
+                                          nn.BatchNorm1d(256), # it doesn't work because during training we have only 1 sample and obviously it needs to be > 1
+                                          nn.Linear(256, 8),
+                                          nn.ReLU(True),
+                                          nn.Linear(8, 1),
+                                          nn.Sigmoid())
 
     def forward(self, input):
         ## ToDo: Make it more general, or at least for training frames/sequence > 1!
