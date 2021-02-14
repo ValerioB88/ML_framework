@@ -891,7 +891,7 @@ class PlotUnityImagesEveryOnceInAWhile(Callback):
                                                      grayscale=self.grayscale)
             self.counter += 1
 
-from generate_datasets.generators.unity_metalearning_generator import TrialType
+from generate_datasets.generators.unity_metalearning_generator import PlaceCamerasMode
 
 class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
     def __init__(self, k, nSt, nSc, nFt, nFc, task_type, *args, **kwargs):

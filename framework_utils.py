@@ -245,7 +245,6 @@ def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more,
     else:
         plot_images = images[0:np.max((4, len(images)))]
         labels = labels[0:np.max((4, len(labels)))]
-
         # more = more[0:np.max((4, len(more)))]
     add_text = [''] * len(labels)
     if isinstance(more, dict) and 'image_name' in list(more.keys()):
@@ -426,6 +425,7 @@ def imshow_batch(inp, stats=None, title_lab=None, title_more='', maximize=True, 
         fig, ax = plt.subplots(int(np.ceil(np.shape(inp)[0] / cols)), cols)
     if not isinstance(ax, np.ndarray):
         ax = np.array(ax)
+    ax = ax.flatten()
     mng = plt.get_current_fig_manager()
     mng.window.showMaximized() if maximize else None
     for idx, image in enumerate(inp):

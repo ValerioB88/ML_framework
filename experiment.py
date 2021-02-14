@@ -15,6 +15,7 @@ import framework_utils as utils
 from models.meta_learning_models import MatchingNetwork, RelationNetSung, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
 from models.sequence_learner import *
 from models.FCnets import FC4
+from models.supervised_models import *
 from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
 import time
@@ -734,109 +735,71 @@ class SupervisedLearningExperiment(Experiment):
                                                  weblogger=self.weblogger)]
         return all_cb
 
-class FewShotLearningExp(Experiment):
-    """
-    Select network_name = 'matching_net_basics' for using the basic network that works for any image size, used in the paper for Omniglot.
-                        'matching_net_more' to use a more complex version of the matching net, with more conv layer. It can still accept any type of input
-                        'matching_net_plus' the decision is made by an evaluation network. It accepts 128x128px images.
-                        #ToDo: with a adaptive average pool make it accept whatever size
-    """
-
-    def __init__(self, experiment_class_name):
-        self.training_folder = None
-        self.testing_folder = None
-        self.n, self.k, self.q = 0, 0, 0
-        self.step = None
-        self.lossfn = None
-        super().__init__(experiment_class_name=experiment_class_name)
-
-    # def _get_num_classes(self, loader):
-    #     return self.k
+class InvarianceSupervisedExp(SupervisedLearningExperiment):
+    def __init__(self, **kwargs):
+        self.invariance_network_name = None
+        self.pretraining_invariance_network = None
+        super().__init__(**kwargs)
 
     def parse_arguments(self, parser):
         super().parse_arguments(parser)
-        parser.add_argument("-n_shot", "--n_shot",
-                            help="images for each classes for meta-training.",
-                            type=int,
-                            default=2)
-        parser.add_argument("-k_way", "--k_way",
-                            help="number of classes for meta-training",
-                            type=int,
-                            default=5)
-        parser.add_argument("-q_query", "--q_queries",
-                            help="number of query for each class for meta-training.",
-                            type=int,
-                            default=1)
-
+        parser.add_argument("-invn", "--invariance_network_name",
+                            help="The network structure used for invariance representation ",
+                            type=str,
+                            default='relation_net')
+        parser.add_argument("-pti", "--pretraining_invariance_network",
+                            help="The path for pretraining invariance network",
+                            type=str,
+                            default='vanilla')
         return parser
 
     def finalize_init(self, PARAMS, list_tags):
-        self.n = PARAMS['n_shot']
-        self.k = PARAMS['k_way']
-        self.q = PARAMS['q_queries']
-        list_tags.append(f'{self.k}w_{self.n}s_{self.q}q')
-
+        self.invariance_network_name = PARAMS['invariance_network_name']
+        self.pretraining_invariance_network = PARAMS['pretraining_invariance_network']
         super().finalize_init(PARAMS, list_tags)
 
     def get_net(self, new_num_classes=None):
-        # num classes makes no sense here
-        # ToDo: Matching Learning pretrain
         device = torch.device('cuda' if self.use_cuda else 'cpu')
-        if network_name == 'matching_net_basic':
-            net = MatchingNetwork(self.n, self.k, self.q, fce=False,
-                                  num_input_channels=1 if self.grayscale else 3,
-                                  lstm_layers=0,
-                                  lstm_input_size=0,
-                                  unrolling_steps=0,
-                                  device=device,
-                                  encoder=get_few_shot_encoder_basic)
-            self.step = matching_net_step
-            self.lossfn = NLLLoss()
-        if network_name == 'matching_net_more':
-            net = MatchingNetwork(self.n, self.k, self.q, fce=False,
-                                  num_input_channels=1 if grayscale else 3,
-                                  lstm_layers=0,
-                                  lstm_input_size=0,
-                                  unrolling_steps=0,
-                                  device=device,
-                                  encoder=get_few_shot_encoder)
-            self.step = matching_net_step
-            self.lossfn = torch.nn.NLLLoss()
 
-        if network_name == 'relation_net':
-            net = RelationNetSung(size_canvas=self.size_canvas)
-            self.step = relation_net_step
-            self.lossfn = MSELoss()
-
-        if network_name == 'relation_net_cat':  # this is my version of relation_net where we contactenate embedded samples
-            net = RelationNetSung(size_canvas=self.size_canvas, n_shots=self.n)
-            self.step = partial(relation_net_step, concatenate=True)
-            self.lossfn = MSELoss()
+        if self.invariance_network_name == 'relation_net':
+            inv_net = RelationNetSung(size_canvas=self.size_canvas, grayscale=self.grayscale).backbone
         else:
-            assert False, "Name network not recognized"
+            assert False, f"Invariance Network Name {self.network_name} not recognized"
+        if self.pretraining_invariance_network != 'vanilla':
+            if os.path.isfile(self.pretraining_invariance_network):
+                print(f"Pretraining value should be a path when used with FewShotLearning (not ImageNet, etc.). Instead is {self.pretraining}")
+            inv_net.load_state_dict(torch.load(self.pretraining_invariance_network, map_location=torch.device('cuda' if self.use_cuda else 'cpu')))
 
-        if pretraining != 'vanilla':
-            if not os.path.isfile(pretraining):
-                print(f"Pretraining value should be a path when used with FewShotLearning (not ImageNet, etc.). Instead is {pretraining}")
-                assert False
-            net.load_state_dict(pretraining)
+        supervised_net = self.prepare_network(network=self.network_name,
+                                                     new_num_classes=new_num_classes,
+                                                     is_server=self.use_cuda,
+                                                     grayscale=self.grayscale,
+                                                     use_gap=self.use_gap,
+                                                     feature_extraction=self.feature_extraction,
+                                                     pretraining=self.pretraining,
+                                                     big_canvas=self.big_canvas,
+                                                     shallow_FC=self.shallow_FC,
+                                                     freeze_fc=self.freeze_fc,
+                                                     scramble_fc=self.scramble_fc,
+                                                     scramble_conv=self.scramble_conv)
+
+
+        net = InvarianceSupervisedModel(inv_net, supervised_net)
+
+        # Freeze the invariant network
+        for param in inv_net.parameters():
+            param.requires_grad = False
+        print("Params to learn:")
+        for name, param in net.named_parameters():
+            if param.requires_grad == True:
+                print("\t", name)
 
         print('***Network***')
         print(net)
         if self.use_cuda:
             net.cuda()
 
-        return net, net.parameters()
-
-    def call_run(self, data_loader, params_to_update, callbacks=None, train=True, epochs=20):
-        return run(data_loader, use_cuda=self.use_cuda, net=self.net,
-                   callbacks=callbacks,
-                   loss_fn=utils.make_cuda(self.lossfn, self.use_cuda),
-                   optimizer=Adam(params_to_update, lr=0.001 if self.learning_rate is None else self.learning_rate),
-                   iteration_step=self.step,
-                   iteration_step_kwargs={'train': train, 'n_shot': self.n, 'k_way': self.k, 'q_queries': self.q},
-                   epochs=epochs)
-
+        return net, net.supervised_net.parameters()
 
 
 class SequentialMetaLearningExp(Experiment):
@@ -906,7 +869,7 @@ class SequentialMetaLearningExp(Experiment):
             self.step = sequence_net_Ntrain_1cand
             self.lossfn = MSELoss()  # CrossEntropyLoss()
         elif self.network_name == 'relation_net':
-            assert self.nSc == 1 and self.nFc == 1 and self.nSt == 1 and self.nFt == 1
+            assert self.nSc <= 1 and self.nFc <= 1 and self.nSt <= 1 and self.nFt <= 1
             net = RelationNetSung(size_canvas=self.size_canvas, grayscale=self.grayscale)
             self.step = sequence_net_Ntrain_1cand
             self.lossfn = MSELoss()
@@ -953,7 +916,7 @@ class SequentialMetaLearningExp(Experiment):
                                                           nSc=testing_loader.dataset.sampler.nSc,
                                                           nFt=testing_loader.dataset.sampler.nFt,
                                                           nFc=testing_loader.dataset.sampler.nFc,
-                                                          task_type=testing_loader.dataset.sampler.trial_type,
+                                                          task_type=testing_loader.dataset.sampler.place_cameras_mode,
                                                           num_classes=self.k,
                                                           use_cuda=self.use_cuda,
                                                           network_name=self.network_name,
@@ -987,11 +950,16 @@ def unity_builder_class(class_obj):
                                 help="Change the size of the image passed by Unity. Put 0 to prevent resizing",
                                 type=str,
                                 default='224_224')
+            parser.add_argument("-play", "--play_mode",
+                                help="Execute in play mode",
+                                type=lambda x: bool(int(x)),
+                                default=0)
             return parser
 
         def finalize_init(self, PARAMS, list_tags):
             self.name_dataset_training = PARAMS['name_dataset_training']
             self.name_datasets_testing = PARAMS['name_dataset_testing']
+            self.play_mode = PARAMS['play_mode']
             if self.name_datasets_testing is None and self.name_dataset_training is None:
                 self.play_mode = True
                 self.name_dataset_training = None

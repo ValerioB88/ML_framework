@@ -56,38 +56,29 @@ def get_few_shot_encoder(num_input_channels=1, output=64, flatten=True) -> nn.Mo
 
 
 class RelationNetSung(nn.Module):
-    def __init__(self, output_encoder=64, size_canvas=(224, 224), n_shots=1, grayscale=False):
+    def __init__(self, output_encoder=64, size_canvas=(224, 224), n_shots=1, grayscale=False, flatten=True):
         super().__init__()
-        # flatten_size = (np.multiply(*np.array(size_canvas) / np.power(2, 6)) * 64).astype(int)
 
-        self.image_embedding_candidates = nn.Sequential(conv_block(1 if grayscale else 3, 64),
-                       conv_block(64, 64),
-                       # conv_block(64, 64),
-                       conv_block(64, output_encoder))
+        self.backbone = nn.Sequential(conv_block(1 if grayscale else 3, 64),
+                                      conv_block(64, 64),
+                                      conv_block(64, 64),
+                                      conv_block(64, 64))  # you can make this larger
+        if flatten:
+            self.backbone.add_module('flatten', Flatten());
 
-        self.relation_net = nn.Sequential(conv_block(n_shots * output_encoder + output_encoder, 64),
-                                          conv_block(64, 64),
-                                          conv_block(64, 64),
-                                          nn.AdaptiveAvgPool2d(1),
-                                          Flatten(),
-                                          nn.Linear(64, 256),
-                                          nn.ReLU(True),
-                                          nn.BatchNorm1d(256), # it doesn't work because during training we have only 1 sample and obviously it needs to be > 1
-                                          nn.Linear(256, 256),
-                                          nn.ReLU(True),
-                                          nn.BatchNorm1d(256), # it doesn't work because during training we have only 1 sample and obviously it needs to be > 1
-                                          nn.Linear(256, 8),
-                                          nn.ReLU(True),
-                                          nn.Linear(8, 1),
-                                          nn.Sigmoid())
+        self.relation_module = nn.Sequential(nn.Linear(4096 * 2, 256),
+                                             nn.BatchNorm1d(256),
+                                             nn.LeakyReLU(),
+                                             nn.Linear(256, 1),
+                                             nn.Sigmoid())
 
     def forward(self, input):
         ## ToDo: Make it more general, or at least for training frames/sequence > 1!
         x, k, nSt, nFt, use_cuda = input
-        emb_all = self.image_embedding_candidates(x)
+        emb_all = self.backbone(x)
         emb_candidates = emb_all[:k]  # this only works for nSt, nFt, nSc and nFc = 1!
         emb_trainings = emb_all[k:]
-        return self.relation_net(torch.cat((emb_candidates, emb_trainings), dim=1))
+        return self.relation_module(torch.cat((emb_candidates, emb_trainings), dim=1))
 
 
 class MatchingNetwork(nn.Module):
