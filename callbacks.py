@@ -798,10 +798,10 @@ class ComputeDataFrame(Callback):
                  np.concatenate(np.array([np.array(['max_softm', 'softm_class']),
                                           cat_to_save,
                                           np.array(['max_logits', 'logits_class']),
-                                          cat_to_save]))]
+                                          cat_to_save]))] ## this currently doesn't work!!
         return array
 
-    def __init__(self, num_classes, use_cuda, network_name, size_canvas, weblogger=0, log_text_plot='', output_and_softmax=True):
+    def __init__(self, num_classes, use_cuda, network_name, size_canvas, weblogger=0, log_text_plot='', output_and_softmax=False):
         super().__init__()
         self.output_and_softmax = output_and_softmax
         self.size_canvas = size_canvas
@@ -811,14 +811,14 @@ class ComputeDataFrame(Callback):
 
         self.index_dataframe = ['net', 'class_name', 'class_output']
         self.column_names = ['is_correct']
-        if output_and_softmax:
+        if output_and_softmax:  # ToDo: output_and_softmax True doesn't work currently
             self.column_names.extend(self.build_columns(['class {}'.format(i) for i in range(self.num_classes)]))
         self.rows_frames = []
         self.use_cuda = use_cuda
         self.weblogger = weblogger
         self.log_text_plot = log_text_plot
 
-    def _get_additional_logs(self, c):
+    def _get_additional_logs(self, logs, c):
         return []
 
     def _compute_and_log_metrics(self, data_frame):
@@ -1008,7 +1008,7 @@ class ComputeDataFrame3DmetaLearning(ComputeDataFrame):
         return data_frame
 
 
-class ComputeDataFrame2D(ComputeDataFrame):
+class ComputeDataFrameTranslation(ComputeDataFrame):
     def __init__(self, translation_type_str, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.translation_type_str = translation_type_str

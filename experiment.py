@@ -1,3 +1,4 @@
+import collections
 import torchvision
 import cloudpickle
 import glob
@@ -15,7 +16,6 @@ import framework_utils as utils
 from models.meta_learning_models import MatchingNetwork, RelationNetSung, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
 from models.sequence_learner import *
 from models.FCnets import FC4
-from models.supervised_models import *
 from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
 import time
@@ -712,11 +712,10 @@ class SupervisedLearningExperiment(Experiment):
                    ComputeConfMatrix(num_classes=num_classes,
                                      weblogger=self.weblogger,
                                      weblog_text=log_text)]
-        all_cb += ([ComputeDataFrame2D(testing_loader.dataset.translation_type_str if isinstance(testing_loader.dataset, TranslateGenerator) else 'no transl',
-                                       num_classes,
-                                       self.use_cuda,
-                                       self.network_name, self.size_canvas,
-                                     log_density_weblog=self.weblogger, log_text_plot=log_text)]
+        all_cb += ([ComputeDataFrame(num_classes,
+                                     self.use_cuda,
+                                     self.network_name, self.size_canvas,
+                                     weblogger=self.weblogger, log_text_plot=log_text)]
                    if save_dataframe else[])
         return all_cb
 
@@ -737,58 +736,53 @@ class SupervisedLearningExperiment(Experiment):
 
 class InvarianceSupervisedExp(SupervisedLearningExperiment):
     def __init__(self, **kwargs):
-        self.invariance_network_name = None
-        self.pretraining_invariance_network = None
+        self.backbone_name = None
+        self.pretraining_backbone = None
         super().__init__(**kwargs)
 
     def parse_arguments(self, parser):
         super().parse_arguments(parser)
-        parser.add_argument("-invn", "--invariance_network_name",
-                            help="The network structure used for invariance representation ",
+        parser.add_argument("-bkbn", "--backbone_name",
+                            help="The network structure used as a backbone [conv4] ",
                             type=str,
-                            default='relation_net')
-        parser.add_argument("-pti", "--pretraining_invariance_network",
-                            help="The path for pretraining invariance network",
+                            default='conv4')
+
+        parser.add_argument("-ptb", "--pretraining_backbone",
+                            help="The path for the backbone pretraining",
                             type=str,
                             default='vanilla')
         return parser
 
     def finalize_init(self, PARAMS, list_tags):
-        self.invariance_network_name = PARAMS['invariance_network_name']
-        self.pretraining_invariance_network = PARAMS['pretraining_invariance_network']
+        self.backbone_name = PARAMS['backbone_name']
+        self.pretraining_backbone = PARAMS['pretraining_backbone']
+        list_tags.append(f'bkb{self.backbone_name}')
+        list_tags.append(f'bkbpretrained' if self.pretraining_backbone != 'vanilla' else 'bkbnvanilla')
+
         super().finalize_init(PARAMS, list_tags)
 
     def get_net(self, new_num_classes=None):
         device = torch.device('cuda' if self.use_cuda else 'cpu')
 
-        if self.invariance_network_name == 'relation_net':
-            inv_net = RelationNetSung(size_canvas=self.size_canvas, grayscale=self.grayscale).backbone
+        if self.backbone_name == 'conv4':
+            backbone = RelationNetSung(size_canvas=self.size_canvas, grayscale=self.grayscale).backbone
         else:
             assert False, f"Invariance Network Name {self.network_name} not recognized"
-        if self.pretraining_invariance_network != 'vanilla':
-            if os.path.isfile(self.pretraining_invariance_network):
-                print(f"Pretraining value should be a path when used with FewShotLearning (not ImageNet, etc.). Instead is {self.pretraining}")
-            inv_net.load_state_dict(torch.load(self.pretraining_invariance_network, map_location=torch.device('cuda' if self.use_cuda else 'cpu')))
 
-        supervised_net = self.prepare_network(network=self.network_name,
-                                                     new_num_classes=new_num_classes,
-                                                     is_server=self.use_cuda,
-                                                     grayscale=self.grayscale,
-                                                     use_gap=self.use_gap,
-                                                     feature_extraction=self.feature_extraction,
-                                                     pretraining=self.pretraining,
-                                                     big_canvas=self.big_canvas,
-                                                     shallow_FC=self.shallow_FC,
-                                                     freeze_fc=self.freeze_fc,
-                                                     scramble_fc=self.scramble_fc,
-                                                     scramble_conv=self.scramble_conv)
+        if self.pretraining_backbone != 'vanilla':
+            if os.path.isfile(self.pretraining_backbone):
+                print(f"Pretraining value should be a path or [vanilla]. Instead is {self.pretraining}")
+            backbone.load_state_dict(torch.load(self.pretraining_backbone, map_location=torch.device('cuda' if self.use_cuda else 'cpu')))
+            # Freeze the backbone
+            for param in backbone.parameters():
+                param.requires_grad = False
+
+        supervised_net = nn.Linear(4096, new_num_classes)
+
+        net = nn.Sequential(collections.OrderedDict([('backbone', backbone),
+                                                     ('classifier', supervised_net)]))
 
 
-        net = InvarianceSupervisedModel(inv_net, supervised_net)
-
-        # Freeze the invariant network
-        for param in inv_net.parameters():
-            param.requires_grad = False
         print("Params to learn:")
         for name, param in net.named_parameters():
             if param.requires_grad == True:
@@ -799,7 +793,7 @@ class InvarianceSupervisedExp(SupervisedLearningExperiment):
         if self.use_cuda:
             net.cuda()
 
-        return net, net.supervised_net.parameters()
+        return net, net.classifier.parameters()
 
 
 class SequentialMetaLearningExp(Experiment):
@@ -927,25 +921,55 @@ class SequentialMetaLearningExp(Experiment):
         return all_cb
 
 
+def with_dataset_name(class_obj):
+    class BuildDatasetExp(class_obj):
+        def __init__(self, **kwargs):
+            self.name_dataset_training = None
+            self.name_datasets_testing = None
+            super().__init__(**kwargs)
+
+        def parse_arguments(self, parser):
+            super().parse_arguments(parser)
+            parser.add_argument("-name_dataset_training", "--name_dataset_training",
+                                help="Select the name of the dataset used for training.",
+                                type=str,
+                                default=None)
+            parser.add_argument("-name_dataset_testing", "--name_dataset_testing",
+                                help="Select the name of the dataset used for testing.",
+                                type=str,
+                                default=None)
+            return parser
+        def finalize_init(self, PARAMS, list_tags):
+            self.name_dataset_training = PARAMS['name_dataset_training']
+            self.name_datasets_testing = PARAMS['name_dataset_testing']
+            if self.name_datasets_testing is None and self.name_dataset_training is None:
+                self.play_mode = True
+                self.name_dataset_training = None
+            if self.output_filename is None and self.name_datasets_testing is not None:
+                assert False, "You provided some dataset for testing, but no output. This is almost always a mistake"
+
+            list_tags.append(f"tr{self.name_dataset_training.split('/')[-1]}") if self.name_datasets_testing is not None else None
+            [list_tags.append(f"te{i.split('/')[-1]}") for i in self.name_datasets_testing.split('_')] if self.name_datasets_testing is not None else None
+
+            if self.name_datasets_testing is not None:
+                self.name_datasets_testing = str.split(self.name_datasets_testing, "_")
+            else:
+                self.name_datasets_testing = []
+
+            super().finalize_init(PARAMS, list_tags)
+
+    return BuildDatasetExp
+
 
 def unity_builder_class(class_obj):
     class UnityExp(class_obj):
         def __init__(self, **kwargs):
-            self.name_dataset_training = None
             self.size_canvas = None
             self.play_mode = False
             super().__init__(**kwargs)
 
         def parse_arguments(self, parser):
             super().parse_arguments(parser)
-            parser.add_argument("-name_dataset_training", "--name_dataset_training",
-                                help="Select the name of the dataset used for training in Unity - set None for running play mode (and if you do, no testing will be done)",
-                                type=str,
-                                default=None)
-            parser.add_argument("-name_dataset_testing", "--name_dataset_testing",
-                                help="Select the name of the dataset used for testing in Unity. It can be more than one. Separate them with _",
-                                type=str,
-                                default=None)
             parser.add_argument("-sc", "--size_canvas_resize",
                                 help="Change the size of the image passed by Unity. Put 0 to prevent resizing",
                                 type=str,
@@ -957,23 +981,7 @@ def unity_builder_class(class_obj):
             return parser
 
         def finalize_init(self, PARAMS, list_tags):
-            self.name_dataset_training = PARAMS['name_dataset_training']
-            self.name_datasets_testing = PARAMS['name_dataset_testing']
             self.play_mode = PARAMS['play_mode']
-            if self.name_datasets_testing is None and self.name_dataset_training is None:
-                self.play_mode = True
-                self.name_dataset_training = None
-            if self.output_filename is None and self.name_datasets_testing is not None:
-                assert False, "You provided some dataset for testing, but no output. This is almost always a mistake"
-
-            list_tags.append(f"te{self.name_datasets_testing}") if self.name_datasets_testing is not None else None
-            list_tags.append(f"tr{self.name_dataset_training}") if self.name_dataset_training is not None else None
-
-            if self.name_datasets_testing is not None:
-                self.name_datasets_testing = str.split(self.name_datasets_testing, "_")
-            else:
-                self.name_datasets_testing = []
-
             self.size_canvas = PARAMS['size_canvas_resize']
             # list_tags.append("Unity")
             list_tags.append('sc{}'.format(str(self.size_canvas).replace(', ', 'x'))) if self.size_canvas != '0' else None
@@ -1019,5 +1027,5 @@ def unity_builder_class(class_obj):
     return UnityExp
 
 
-sequence_unity_meta_learning_exp = unity_builder_class(SequentialMetaLearningExp)
+sequence_unity_meta_learning_exp = unity_builder_class(with_dataset_name(SequentialMetaLearningExp))
 
