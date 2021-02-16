@@ -796,6 +796,7 @@ class InvarianceSupervisedExp(SupervisedLearningExperiment):
         return net, net.classifier.parameters()
 
 
+
 class SequentialMetaLearningExp(Experiment):
     """
     Select network_name = 'matching_net_basics' for using the basic network that works for any image size, used in the paper for Omniglot.
@@ -891,9 +892,26 @@ class SequentialMetaLearningExp(Experiment):
                                           'dataset': data_loader.dataset},
                    epochs=epochs)
 
+    class SaveModelBackbone(Callback):
+        def __init__(self, net, output_path, log_in_weblogger=False):
+            self.output_path = output_path
+            self.net = net
+            super().__init__()
+
+        def on_train_end(self, logs=None):
+            if self.output_path is not None:
+                pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
+                print('Saving model in {}'.format(self.output_path))
+                torch.save({'full': self.net.state_dict(),
+                            'backbone': self.net.backbone.state_dict(),
+                            'relation_module': self.net.relation_module.state_dict()}, self.output_path)
+
     def prepare_train_callbacks(self, log_text, train_loader):
         all_cb = super().prepare_train_callbacks(log_text, train_loader)
         # This ComputeConfMatrix is used for matching, that's why num_class = 2
+        all_cb = [i for i in all_cb if not isinstance(i, SaveModel)]  # eliminate old SaveModel
+        all_cb += ([self.SaveModelBackbone(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
+
         all_cb += [ComputeConfMatrix(num_classes=2,
                                      weblogger=self.weblogger,
                                      weblog_text=log_text)]

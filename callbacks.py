@@ -573,6 +573,20 @@ class SaveModel(Callback):
             # neptune.log_artifact(self.output_path, self.output_path) if self.log_in_neptune else None
 
 
+class SaveModel(Callback):
+    def __init__(self, net, output_path, log_in_weblogger=False):
+        self.output_path = output_path
+        self.net = net
+        super().__init__()
+
+    def on_train_end(self, logs=None):
+        if self.output_path is not None:
+            pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
+            print('Saving model in {}'.format(self.output_path))
+            torch.save(self.net.state_dict(), self.output_path)
+
+
+
 class Metrics(Callback):
     def __init__(self, use_cuda, log_every, log_text=''):
         self.use_cuda = use_cuda
