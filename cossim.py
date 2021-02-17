@@ -6,9 +6,11 @@ import numpy as np
 import PIL.Image as Image
 from abc import ABC, abstractmethod
 from generate_datasets.generators.extension_generators import symmetric_steps
+from generate_datasets.generators.input_image_generator import InputImagesGenerator
+import matplotlib.pyplot as plt
 
 class CosSim(ABC):
-    def __init__(self, net, dataset):
+    def __init__(self, net, dataset: InputImagesGenerator):
         self.cuda = False
         if torch.cuda.is_available():
             self.cuda = True
@@ -19,8 +21,14 @@ class CosSim(ABC):
         self.activation = {}
 
     @abstractmethod
-    def get_base_and_other_canvasses(self, class_num, name_class, image: Image):
+    def get_base_and_other_canvasses(self, class_num, name_class):
         raise NotImplementedError
+
+    def finalize_each_class(self, name_class, cossim, x_values):
+        """
+        Use for plotting, analysis, etc.
+        """
+        pass;
 
     def get_activation(self, name):
         def hook(model, input, output):
@@ -48,11 +56,8 @@ class CosSim(ABC):
         """
 
         name_class = self.dataset.map_num_to_name[class_num]
-        num = np.random.choice(len(self.dataset.samples[name_class]))
-        image_name = self.dataset.samples[name_class][num]
 
-        image = Image.open(self.dataset.folder + '/' + image_name)
-        base_canvas, other_canvasses, x_values = self.get_base_and_other_canvasses(class_num, name_class, image)
+        base_canvas, other_canvasses, x_values = self.get_base_and_other_canvasses(class_num, name_class)
         self.net(make_cuda(base_canvas.unsqueeze(0), self.cuda))
         base_activation = {}
         # base_activation = activation['one_to_last']
@@ -62,7 +67,7 @@ class CosSim(ABC):
             base_activation[name] = features
 
         # cos_fun = torch.nn.CosineSimilarity(dim=1)
-        cossim = {}
+        cossim_net = {}
         for canvas_comparison in other_canvasses:
             canvas_comparison_activation = {}
             self.net(make_cuda(canvas_comparison.unsqueeze(0), self.cuda))
@@ -70,11 +75,13 @@ class CosSim(ABC):
                 if not np.any([i in name for i in self.only_save]):
                     continue
                 canvas_comparison_activation[name] = features
-                if name not in cossim:
-                    cossim[name] = []
+                if name not in cossim_net:
+                    cossim_net[name] = []
                 # canvas_comparison_activation = features
-                cossim[name].append(torch.nn.CosineSimilarity(dim=0)(base_activation[name].flatten(), canvas_comparison_activation[name].flatten()).item())
-        return cossim, x_values
+                cossim_net[name].append(torch.nn.CosineSimilarity(dim=0)(base_activation[name].flatten(), canvas_comparison_activation[name].flatten()).item())
+        cossim_images = [torch.nn.CosineSimilarity(dim=0)(base_canvas.flatten(), c.flatten()).item() for c in other_canvasses]
+        self.finalize_each_class(name_class, cossim_net, cossim_images, x_values)
+        return cossim_net, cossim_images, x_values
 
     def calculate_cossim_network(self):
         x_value = None
@@ -87,16 +94,17 @@ class CosSim(ABC):
             hook_lists.append(i.register_forward_hook(self.get_activation('{}: {}'.format(idx, str.split(str(i), '(')[0]))))
 
         ## NOW GET COSINE SIM
-        cossim = {}
+        cossim_net = {}
+        cossim_img = {}
         for c in range(self.dataset.num_classes):
-            cossim[c], x_values = self.get_cosine_similarity_one_class_random_img(c)
+            cossim_net[c], cossim_img[c], x_values = self.get_cosine_similarity_one_class_random_img(c)
 
         ## REMOVE HOOKS
         for h in hook_lists:
             h.remove()
         if was_train:
             self.net.train()
-        return cossim, x_values
+        return cossim_net, cossim_img, x_values
 
     def get_canvas(self, image, class_num, rotation, size, center):
         # random_center = dataset._get_translation(label, image_name, idx)
@@ -110,7 +118,11 @@ class CosSimTranslation(CosSim):
     """
     We compute cosine similarity between the leftmost-centered object and the ones on the horizontal line
     """
-    def get_base_and_other_canvasses(self, class_num, name_class, image: Image):
+    def get_base_and_other_canvasses(self, class_num, name_class):
+        num = np.random.choice(len(self.dataset.samples[name_class]))
+        image_name = self.dataset.samples[name_class][num]
+
+        image = Image.open(self.dataset.folder + '/' + image_name)
         other_canvasses = []
         image, *_ = self.dataset._resize(image)
         minX, maxX, minY, maxY = self.dataset.translations_range[name_class]
@@ -130,7 +142,11 @@ class CosSimResize(CosSim):
     """
     We compute cosine similarity between the leftmost-centered object and the ones on the horizontal line
     """
-    def get_base_and_other_canvasses(self, class_num, name_class, image: Image):
+    def get_base_and_other_canvasses(self, class_num, name_class):
+        num = np.random.choice(len(self.dataset.samples[name_class]))
+        image_name = self.dataset.samples[name_class][num]
+
+        image = Image.open(self.dataset.folder + '/' + image_name)
         other_canvasses = []
         minX, maxX, minY, maxY = self.dataset.translations_range[name_class]
         resize_factor = np.arange(0.1, 2.5 + 0.2, 0.2)
@@ -147,7 +163,13 @@ class CosSimRotate(CosSim):
     """
     We compute cosine similarity between the leftmost-centered object and the ones on the horizontal line
     """
-    def get_base_and_other_canvasses(self, class_num, name_class, image: Image):
+    def get_base_and_other_canvasses(self, class_num, name_class):
+        num = np.random.choice(len(self.dataset.samples[name_class]))
+        image_name = self.dataset.samples[name_class][num]
+
+        image = Image.open(self.dataset.folder + '/' + image_name)
+
+
         other_canvasses = []
         minX, maxX, minY, maxY = self.dataset.translations_range[name_class]
         rotations = np.arange(0, 360, 10)

@@ -6,7 +6,7 @@ from models.model_utils import Flatten, conv_block
 import torch.nn.functional as F
 import numpy as np
 from framework_utils import make_cuda
-
+from models.conv4 import Conv4
 
 
 def get_few_shot_encoder_basic(num_input_channels=1) -> nn.Module:
@@ -56,17 +56,15 @@ def get_few_shot_encoder(num_input_channels=1, output=64, flatten=True) -> nn.Mo
 
 
 class RelationNetSung(nn.Module):
-    def __init__(self, output_encoder=64, size_canvas=(224, 224), n_shots=1, grayscale=False, flatten=True):
+    def __init__(self, backbone, output_encoder=64, size_canvas=(224, 224), n_shots=1, grayscale=False, flatten=True):
         super().__init__()
 
-        self.backbone = nn.Sequential(conv_block(1 if grayscale else 3, 64),
-                                      conv_block(64, 64),
-                                      conv_block(64, 64),
-                                      conv_block(64, 64))  # you can make this larger
+        self.backbone = backbone
+
         if flatten:
             self.backbone.add_module('flatten', Flatten());
 
-        self.relation_module = nn.Sequential(nn.Linear(4096 * 2, 256),
+        self.relation_module = nn.Sequential(nn.Linear(64 * 2, 256),  # (imagesize=128/ 2^4) * 64 = 4096
                                              nn.BatchNorm1d(256),
                                              nn.LeakyReLU(),
                                              nn.Linear(256, 1),

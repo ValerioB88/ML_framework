@@ -421,7 +421,6 @@ def imshow_batch(inp, stats=None, title_lab=None, title_more='', maximize=True, 
 
     cols = np.min([5, len(inp)])
     if ax is None:
-        fig = plt.figure(facecolor='gray')
         fig, ax = plt.subplots(int(np.ceil(np.shape(inp)[0] / cols)), cols)
     if not isinstance(ax, np.ndarray):
         ax = np.array(ax)

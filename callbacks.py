@@ -672,7 +672,7 @@ class TotalAccuracyMetric(Metrics):
 
     def on_train_end(self, logs=None):
         logs['total_accuracy'] = 100.0 * self.correct_train / self.total_samples
-        print('Total Accuracy for [{}] samples, [{}]: {}%'.format(self.total_samples, self.log_text, logs['total_accuracy']))
+        print(f'Total Accuracy for [{self.total_samples}] samples, [{logs["tot_iter"]}] iter, [{self.log_text}]: {logs["total_accuracy"]}%')
         metric_str = 'Metric/{} Acc'.format(self.log_text)
         if self.to_weblogger == 1:
             wandb.log({metric_str: logs['total_accuracy']})
@@ -908,14 +908,13 @@ class PlotUnityImagesEveryOnceInAWhile(Callback):
 from generate_datasets.generators.unity_metalearning_generator import PlaceCamerasMode
 
 class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
-    def __init__(self, k, nSt, nSc, nFt, nFc, task_type, *args, **kwargs):
+    def __init__(self, k, nSt, nSc, nFt, nFc, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.k = k
         self.nSt = nSt
         self.nSc = nSc
         self.nFt = nFt
         self.nFc = nFc
-        self.task_type = task_type
         self.additional_logs_names = ['task_num', 'objC', 'objT',  'candidate_campos_XYZ', 'training_campos_XYZ', 'rel_score']
         self.column_names.extend(self.additional_logs_names)
         self.camera_positions_batch = None

@@ -20,7 +20,6 @@ from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
 import time
 import wandb
-from generate_datasets.generators.unity_metalearning_generator import UnityGenMetaLearning
 
 # from wandb import magic
 
@@ -199,7 +198,8 @@ class Experiment(ABC):
 
         num_classes = self._get_num_classes(train_loader)
 
-        all_cb = [StandardMetrics(log_every=self.console_check_every, print_it=True,
+        all_cb = [
+            StandardMetrics(log_every=self.console_check_every, print_it=True,
                                   use_cuda=self.use_cuda,
                                   weblogger=0, log_text=log_text,
                                   metrics_prefix='cnsl'),
@@ -221,13 +221,13 @@ class Experiment(ABC):
                   TotalAccuracyMetric(use_cuda=self.use_cuda,
                                       to_weblog=self.weblogger, log_text=log_text)]
 
+
         all_cb += ([SaveModel(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
         if self.weblogger:
             all_cb += [StandardMetrics(log_every=self.weblog_check_every, print_it=False,
                                        use_cuda=self.use_cuda,
                                        weblogger=self.weblogger, log_text=log_text,
                                        metrics_prefix='webl'),
-
                        PlotGradientWeblog(net=self.net, log_every=50, plot_every=500, log_txt=log_text, weblogger=self.weblogger)]
 
         return all_cb
@@ -273,7 +273,7 @@ class Experiment(ABC):
         self.net = net
         if log_text is None:
             log_text = [d.dataset.name_generator for d in test_loaders_list]
-        print(f"**Testing Started** [{log_text}]")
+        print(f"\n**Testing Started** [{log_text}]")
 
         self.experiment_loaders[self.current_run]['testing'].append(test_loaders_list)
         save_dataframe = True if self.output_filename is not None else False
@@ -415,8 +415,8 @@ class SupervisedLearningExperiment(Experiment):
                    net=self.net,
                    callbacks=callbacks,
                    loss_fn=utils.make_cuda(torch.nn.CrossEntropyLoss(), self.use_cuda),
-                   optimizer=torch.optim.Adam(params_to_update,
-                                              lr=0.0001 if self.learning_rate is None else self.learning_rate),
+                   optimizer=torch.optim.SGD(params_to_update, lr=0.001, momentum=0.9),  #torch.optim.Adam(params_to_update,
+                              #                lr=0.0001 if self.learning_rate is None else self.learning_rate),
                    iteration_step=standard_net_step,
                    iteration_step_kwargs={'train': train},
                    epochs=epochs
@@ -727,75 +727,12 @@ class SupervisedLearningExperiment(Experiment):
             all_cb += [ComputeConfMatrix(num_classes=num_classes,
                                          weblogger=self.weblogger,
                                          weblog_text=log_text,
-                                         reset_every=200),
-                       RollingAccEachClassWeblog(log_every=self.weblog_check_every,
+                                         reset_every=200)]
+            all_cb +=[RollingAccEachClassWeblog(log_every=self.weblog_check_every,
                                                  num_classes=num_classes,
                                                  weblog_text=log_text,
                                                  weblogger=self.weblogger)]
         return all_cb
-
-class InvarianceSupervisedExp(SupervisedLearningExperiment):
-    def __init__(self, **kwargs):
-        self.backbone_name = None
-        self.pretraining_backbone = None
-        super().__init__(**kwargs)
-
-    def parse_arguments(self, parser):
-        super().parse_arguments(parser)
-        parser.add_argument("-bkbn", "--backbone_name",
-                            help="The network structure used as a backbone [conv4] ",
-                            type=str,
-                            default='conv4')
-
-        parser.add_argument("-ptb", "--pretraining_backbone",
-                            help="The path for the backbone pretraining",
-                            type=str,
-                            default='vanilla')
-        return parser
-
-    def finalize_init(self, PARAMS, list_tags):
-        self.backbone_name = PARAMS['backbone_name']
-        self.pretraining_backbone = PARAMS['pretraining_backbone']
-        list_tags.append(f'bkb{self.backbone_name}')
-        list_tags.append(f'bkbpretrained' if self.pretraining_backbone != 'vanilla' else 'bkbnvanilla')
-
-        super().finalize_init(PARAMS, list_tags)
-
-    def get_net(self, new_num_classes=None):
-        device = torch.device('cuda' if self.use_cuda else 'cpu')
-
-        if self.backbone_name == 'conv4':
-            backbone = RelationNetSung(size_canvas=self.size_canvas, grayscale=self.grayscale).backbone
-        else:
-            assert False, f"Invariance Network Name {self.network_name} not recognized"
-
-        if self.pretraining_backbone != 'vanilla':
-            if os.path.isfile(self.pretraining_backbone):
-                print(f"Pretraining value should be a path or [vanilla]. Instead is {self.pretraining}")
-            backbone.load_state_dict(torch.load(self.pretraining_backbone, map_location=torch.device('cuda' if self.use_cuda else 'cpu')))
-            # Freeze the backbone
-            for param in backbone.parameters():
-                param.requires_grad = False
-
-        supervised_net = nn.Linear(4096, new_num_classes)
-
-        net = nn.Sequential(collections.OrderedDict([('backbone', backbone),
-                                                     ('classifier', supervised_net)]))
-
-
-        print("Params to learn:")
-        for name, param in net.named_parameters():
-            if param.requires_grad == True:
-                print("\t", name)
-
-        print('***Network***')
-        print(net)
-        if self.use_cuda:
-            net.cuda()
-
-        return net, net.classifier.parameters()
-
-
 
 class SequentialMetaLearningExp(Experiment):
     """
@@ -839,7 +776,7 @@ class SequentialMetaLearningExp(Experiment):
                             type=int,
                             default=2)
         parser.add_argument("-k", "--k",
-                            help="Num of objects",
+                            help="Num of camera sets",
                             type=int,
                             default=2)
         return parser
@@ -851,7 +788,6 @@ class SequentialMetaLearningExp(Experiment):
         self.nFc = PARAMS['nFc']
         self.k = PARAMS['k']
         list_tags.append(f'{self.k}x{self.nSt}x{self.nSc}x{self.nFt}x{self.nFc}')
-        # list_tags.append('Sequential')
         list_tags.append(self.network_name)
         super().finalize_init(PARAMS, list_tags)
 
@@ -865,7 +801,7 @@ class SequentialMetaLearningExp(Experiment):
             self.lossfn = MSELoss()  # CrossEntropyLoss()
         elif self.network_name == 'relation_net':
             assert self.nSc <= 1 and self.nFc <= 1 and self.nSt <= 1 and self.nFt <= 1
-            net = RelationNetSung(size_canvas=self.size_canvas, grayscale=self.grayscale)
+            net = RelationNetSung(backbone_name='conv4', size_canvas=self.size_canvas, grayscale=self.grayscale)
             self.step = sequence_net_Ntrain_1cand
             self.lossfn = MSELoss()
         else:
@@ -892,26 +828,10 @@ class SequentialMetaLearningExp(Experiment):
                                           'dataset': data_loader.dataset},
                    epochs=epochs)
 
-    class SaveModelBackbone(Callback):
-        def __init__(self, net, output_path, log_in_weblogger=False):
-            self.output_path = output_path
-            self.net = net
-            super().__init__()
-
-        def on_train_end(self, logs=None):
-            if self.output_path is not None:
-                pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
-                print('Saving model in {}'.format(self.output_path))
-                torch.save({'full': self.net.state_dict(),
-                            'backbone': self.net.backbone.state_dict(),
-                            'relation_module': self.net.relation_module.state_dict()}, self.output_path)
 
     def prepare_train_callbacks(self, log_text, train_loader):
         all_cb = super().prepare_train_callbacks(log_text, train_loader)
         # This ComputeConfMatrix is used for matching, that's why num_class = 2
-        all_cb = [i for i in all_cb if not isinstance(i, SaveModel)]  # eliminate old SaveModel
-        all_cb += ([self.SaveModelBackbone(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
-
         all_cb += [ComputeConfMatrix(num_classes=2,
                                      weblogger=self.weblogger,
                                      weblog_text=log_text)]
@@ -928,7 +848,6 @@ class SequentialMetaLearningExp(Experiment):
                                                           nSc=testing_loader.dataset.sampler.nSc,
                                                           nFt=testing_loader.dataset.sampler.nFt,
                                                           nFc=testing_loader.dataset.sampler.nFc,
-                                                          task_type=testing_loader.dataset.sampler.place_cameras_mode,
                                                           num_classes=self.k,
                                                           use_cuda=self.use_cuda,
                                                           network_name=self.network_name,
@@ -966,8 +885,8 @@ def with_dataset_name(class_obj):
             if self.output_filename is None and self.name_datasets_testing is not None:
                 assert False, "You provided some dataset for testing, but no output. This is almost always a mistake"
 
-            list_tags.append(f"tr{self.name_dataset_training.split('/')[-1]}") if self.name_datasets_testing is not None else None
-            [list_tags.append(f"te{i.split('/')[-1]}") for i in self.name_datasets_testing.split('_')] if self.name_datasets_testing is not None else None
+            list_tags.append(f"tr{self.name_dataset_training.split('data')[-1]}") if self.name_dataset_training is not None else None
+            [list_tags.append(f"te{i.split('data')[-1]}") for i in self.name_datasets_testing.split('_')] if self.name_datasets_testing is not None else None
 
             if self.name_datasets_testing is not None:
                 self.name_datasets_testing = str.split(self.name_datasets_testing, "_")
@@ -1029,11 +948,12 @@ def unity_builder_class(class_obj):
                                                         grayscale=self.grayscale,
                                                         plot_every=1000,
                                                         plot_only_n_times=20),
-                       TriggerActionWithPatience(min_delta=0.01, patience=400, percentage=True, mode='max',
-                                                 reaching_goal=90,
-                                                 metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
-                                                 check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
-                                                 triggered_action=ck.go_next_level)]
+                       # TriggerActionWithPatience(min_delta=0.01, patience=400, percentage=True, mode='max',
+                       #                           reaching_goal=90,
+                       #                           metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
+                       #                           check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
+                       #                           triggered_action=ck.go_next_level)]
+            ]
             return all_cb
         def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
             all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
