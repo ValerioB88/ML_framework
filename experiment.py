@@ -199,36 +199,36 @@ class Experiment(ABC):
         num_classes = self._get_num_classes(train_loader)
 
         all_cb = [
-            StandardMetrics(log_every=self.console_check_every, print_it=True,
-                                  use_cuda=self.use_cuda,
-                                  weblogger=0, log_text=log_text,
-                                  metrics_prefix='cnsl'),
-                  TriggerActionWithPatience(min_delta=0.01, patience=800, percentage=True, mode='max',
-                                            reaching_goal=self.stop_when_train_acc_is,
-                                            metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
-                                            check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
-                                            triggered_action=stop),  # once reached a certain accuracy
-                  TriggerActionWithPatience(min_delta=0.01, patience=self.patience_stagnation, percentage=True, mode='min',
-                                            reaching_goal=None,
-                                            metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
-                                            check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
-                                            triggered_action=stop),  # for stagnation
-                  StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),  # you could use early stopping for that
+            # StandardMetrics(log_every=self.console_check_every, print_it=True,
+            #                       use_cuda=self.use_cuda,
+            #                       weblogger=0, log_text=log_text,
+            #                       metrics_prefix='cnsl'),
+            #       TriggerActionWithPatience(min_delta=0.01, patience=800, percentage=True, mode='max',
+            #                                 reaching_goal=self.stop_when_train_acc_is,
+            #                                 metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
+            #                                 check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
+            #                                 triggered_action=stop),  # once reached a certain accuracy
+            #       TriggerActionWithPatience(min_delta=0.01, patience=self.patience_stagnation, percentage=True, mode='min',
+            #                                 reaching_goal=None,
+            #                                 metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
+            #                                 check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
+            #                                 triggered_action=stop),  # for stagnation
+            #       StopWhenMetricIs(value_to_reach=self.max_iterations, metric_name='tot_iter'),  # you could use early stopping for that
+            #
+            #
+            #       StopFromUserInput(),
+                  PlotTimeElapsed(time_every=100)]
+                  # TotalAccuracyMetric(use_cuda=self.use_cuda,
+                  #                     to_weblog=self.weblogger, log_text=log_text)]
 
 
-                  StopFromUserInput(),
-                  PlotTimeElapsed(time_every=100),
-                  TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_weblog=self.weblogger, log_text=log_text)]
-
-
-        all_cb += ([SaveModel(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
-        if self.weblogger:
-            all_cb += [StandardMetrics(log_every=self.weblog_check_every, print_it=False,
-                                       use_cuda=self.use_cuda,
-                                       weblogger=self.weblogger, log_text=log_text,
-                                       metrics_prefix='webl'),
-                       PlotGradientWeblog(net=self.net, log_every=50, plot_every=500, log_txt=log_text, weblogger=self.weblogger)]
+        # all_cb += ([SaveModel(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
+        # if self.weblogger:
+        #     all_cb += [StandardMetrics(log_every=self.weblog_check_every, print_it=False,
+        #                                use_cuda=self.use_cuda,
+        #                                weblogger=self.weblogger, log_text=log_text,
+        #                                metrics_prefix='webl'),
+        #                PlotGradientWeblog(net=self.net, log_every=50, plot_every=500, log_txt=log_text, weblogger=self.weblogger)]
 
         return all_cb
 
@@ -242,7 +242,7 @@ class Experiment(ABC):
         all_cb = self.prepare_train_callbacks(log_text, train_loader)
 
         all_cb += (callbacks or [])
-
+        self.net.train()
         net, logs = self.call_run(train_loader,
                                   params_to_update=params_to_update,
                                   train=True, callbacks=all_cb)
@@ -414,8 +414,8 @@ class SupervisedLearningExperiment(Experiment):
                    use_cuda=self.use_cuda,
                    net=self.net,
                    callbacks=callbacks,
-                   loss_fn=utils.make_cuda(torch.nn.CrossEntropyLoss(), self.use_cuda),
-                   optimizer=torch.optim.SGD(params_to_update, lr=0.001, momentum=0.9),  #torch.optim.Adam(params_to_update,
+                   loss_fn=torch.nn.CrossEntropyLoss(),
+                   optimizer=torch.optim.SGD(params_to_update, lr=0.1, momentum=0.9),  #torch.optim.Adam(params_to_update,
                               #                lr=0.0001 if self.learning_rate is None else self.learning_rate),
                    iteration_step=standard_net_step,
                    iteration_step_kwargs={'train': train},
@@ -723,15 +723,15 @@ class SupervisedLearningExperiment(Experiment):
         num_classes = self._get_num_classes(train_loader)
 
         all_cb = super().prepare_train_callbacks(log_text, train_loader)
-        if self.weblogger:
-            all_cb += [ComputeConfMatrix(num_classes=num_classes,
-                                         weblogger=self.weblogger,
-                                         weblog_text=log_text,
-                                         reset_every=200)]
-            all_cb +=[RollingAccEachClassWeblog(log_every=self.weblog_check_every,
-                                                 num_classes=num_classes,
-                                                 weblog_text=log_text,
-                                                 weblogger=self.weblogger)]
+        # if self.weblogger:
+        #     all_cb += [ComputeConfMatrix(num_classes=num_classes,
+        #                                  weblogger=self.weblogger,
+        #                                  weblog_text=log_text,
+        #                                  reset_every=200)]
+        #     all_cb +=[RollingAccEachClassWeblog(log_every=self.weblog_check_every,
+        #                                          num_classes=num_classes,
+        #                                          weblog_text=log_text,
+        #                                          weblogger=self.weblogger)]
         return all_cb
 
 class SequentialMetaLearningExp(Experiment):

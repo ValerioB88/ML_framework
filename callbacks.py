@@ -651,7 +651,9 @@ class StandardMetrics(RunningMetrics):
             if self.print_it:
                 print('[iter{}] loss: {}, train_acc: {}'.format(batch_logs['tot_iter'], batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
             metric1 = 'Metric/{}/ Mean Running Loss '.format(self.log_text)
-            metric2 = 'Metric/{}/ Mean Train Accuracy train'.format(self.log_text)
+            # metric2 = 'Metric/{}/ Mean Train Accuracy train'.format(self.log_text)
+            metric2 = 'accuracy'
+            metric1 = 'loss'
             if self.weblogger == 1:
                 wandb.log({metric1: batch_logs[f'{self.metrics_prefix}/mean_loss'],
                            metric2: batch_logs[f'{self.metrics_prefix}/mean_acc']})

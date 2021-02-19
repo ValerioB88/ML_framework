@@ -53,20 +53,22 @@ def clip_grad_norm_(parameters, max_norm, norm_type=2):
 def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
     logs = {}
     images, labels, more = data
+    images = make_cuda(images, use_cuda)
+    labels = make_cuda(labels, use_cuda)
     if train:
-        model.train()
+        # model.train()
         optimizer.zero_grad()
     else:
         model.eval()
 
-    output_batch = model(make_cuda(images, use_cuda))
-    loss = loss_fn(make_cuda(output_batch, use_cuda),
-                   make_cuda(labels, use_cuda))
+    output_batch = model(images)
+    loss = loss_fn(output_batch,
+                   labels)
     logs['output'] = output_batch
     logs['more'] = more
     logs['images'] = images
 
-    max_output, predicted = torch.max(output_batch, 1)
+    predicted = torch.argmax(output_batch, -1)
     if train:
         loss.backward()
         optimizer.step()
@@ -188,7 +190,8 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
     batch_logs = {}
 
     callbacks.on_train_begin()
-
+    import time
+    start = time.time()
     tot_iter = 0
     for epoch in range(epochs):
         epoch_logs = {}
@@ -202,10 +205,12 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
             loss, y_true, y_pred, logs = iteration_step(data, net, loss_fn, optimizer, use_cuda, **iteration_step_kwargs)
 
             batch_logs.update({'y_pred': y_pred, 'loss': loss.item(), 'y_true': y_true, 'tot_iter': tot_iter, 'stop': False, **logs})
-
+            # batch_logs.update({'tot_iter': tot_iter, 'stop': False})
             callbacks.on_training_step_end(batch_index, batch_logs)
             callbacks.on_batch_end(batch_index, batch_logs)
-
+            if tot_iter % 100 == 99:
+                print(f"100 iter: {time.time() - start}")
+                start = time.time()
             if batch_logs['stop']:
                 break
 

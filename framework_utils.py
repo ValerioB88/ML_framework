@@ -171,7 +171,7 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
 
     stats = {}
     compute_my_generator_info = False
-    if isinstance(dataloader.dataset, InputImagesGenerator):
+    if 'stats' in dir(dataloader.dataset):
         dataset = dataloader.dataset
         compute_my_generator_info = True
         dataset_name = dataset.name_generator
