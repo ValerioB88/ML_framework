@@ -55,7 +55,7 @@ class CosSim(ABC):
         cossim: [group class idx][name feature][list of cossim for each step]
         """
 
-        name_class = self.dataset.map_num_to_name[class_num]
+        name_class = self.dataset.idx_to_class[class_num]
 
         base_canvas, other_canvasses, x_values = self.get_base_and_other_canvasses(class_num, name_class)
         self.net(make_cuda(base_canvas.unsqueeze(0), self.cuda))

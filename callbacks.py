@@ -23,7 +23,7 @@ import pandas as pd
 import signal, os
 from cossim import CosSimTranslation, CosSimResize, CosSimRotate
 from neptunecontrib.api import log_chart
-
+import time
 
 class CallbackList(object):
     """Container abstracting a list of callbacks.
@@ -42,6 +42,14 @@ class CallbackList(object):
     def set_model(self, model):
         for callback in self.callbacks:
             callback.set_model(model)
+
+    def set_optimizer(self, model):
+        for callback in self.callbacks:
+            callback.set_optimizer(model)
+
+    def set_loss_fn(self, model):
+        for callback in self.callbacks:
+            callback.set_loss_fn(model)
 
     def on_epoch_begin(self, epoch, logs=None):
         """Called at the start of an epoch.
@@ -115,12 +123,20 @@ class CallbackList(object):
 class Callback(object):
     def __init__(self):
         self.model = None
+        self.optimizer = None
+        self.loss_fn = None
 
     def set_params(self, params):
         self.params = params
 
     def set_model(self, model):
         self.model = model
+
+    def set_optimizer(self, optimizer):
+        self.optimizer = optimizer
+
+    def set_loss_fn(self, loss_fn):
+        self.loss_fn = loss_fn
 
     def on_epoch_begin(self, epoch, logs=None):
         pass
@@ -142,78 +158,6 @@ class Callback(object):
 
     def on_train_end(self, logs=None):
         pass
-
-
-class LearningRateScheduler(Callback):
-    """Learning rate scheduler.
-    # Arguments
-        schedule: a function that takes an epoch index as input
-            (integer, indexed from 0) and current learning rate
-            and returns a new learning rate as output (float).
-        verbose: int. 0: quiet, 1: update messages.
-    """
-
-    def __init__(self, schedule, verbose=0):
-        super(LearningRateScheduler, self).__init__()
-        self.schedule = schedule
-        self.verbose = verbose
-
-    def on_train_begin(self, logs=None):
-        self.optimiser = self.params['optimiser']
-
-    def on_epoch_begin(self, epoch, logs=None):
-        lrs = [self.schedule(epoch, param_group['lr']) for param_group in self.optimiser.param_groups]
-
-        if not all(isinstance(lr, (float, np.float32, np.float64)) for lr in lrs):
-            raise ValueError('The output of the "schedule" function '
-                             'should be float.')
-        self.set_lr(epoch, lrs)
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        if len(self.optimiser.param_groups) == 1:
-            logs['lr'] = self.optimiser.param_groups[0]['lr']
-        else:
-            for i, param_group in enumerate(self.optimiser.param_groups):
-                logs['lr_{}'.format(i)] = param_group['lr']
-
-    def set_lr(self, epoch, lrs):
-        for i, param_group in enumerate(self.optimiser.param_groups):
-            new_lr = lrs[i]
-            param_group['lr'] = new_lr
-            if self.verbose:
-                print('Epoch {:5d}: setting learning rate'
-                      ' of group {} to {:.4e}.'.format(epoch, i, new_lr))
-
-
-class DefaultCallback(Callback):
-    """Records metrics over epochs by averaging over each batch.
-
-    NB The metrics are calculated with a moving model
-    """
-
-    def on_epoch_begin(self, batch, logs=None):
-        self.seen = 0
-        self.totals = {}
-        self.metrics = ['loss'] + self.params['metrics']
-
-    def on_batch_end(self, batch, logs=None):
-        logs = logs or {}
-        batch_size = logs.get('size', 1) or 1
-        self.seen += batch_size
-
-        for k, v in logs.items():
-            if k in self.totals:
-                self.totals[k] += v * batch_size
-            else:
-                self.totals[k] = v * batch_size
-
-    def on_epoch_end(self, epoch, logs=None):
-        if logs is not None:
-            for k in self.metrics:
-                if k in self.totals:
-                    # Make value available to next callbacks.
-                    logs[k] = self.totals[k] / self.seen
 
 
 class ProgressBarLogger(Callback):
@@ -261,116 +205,6 @@ class ProgressBarLogger(Callback):
             self.pbar.set_postfix(self.log_values)
 
         self.pbar.close()
-
-
-class ReduceLROnPlateau(Callback):
-    """Reduce learning rate when a metric has stopped improving.
-
-    Models often benefit from reducing the learning rate by a factor
-    of 2-10 once learning stagnates. This callback monitors a
-    quantity and if no improvement is seen for a 'patience' number
-    of epochs, the learning rate is reduced.
-
-    # Arguments
-        monitor: quantity to be monitored.
-        factor: factor by which the learning rate will
-            be reduced. new_lr = lr * factor
-        patience: number of epochs with no improvement
-            after which learning rate will be reduced.
-        verbose: int. 0: quiet, 1: update messages.
-        mode: one of {auto, min, max}. In `min` mode,
-            lr will be reduced when the quantity
-            monitored has stopped decreasing; in `max`
-            mode it will be reduced when the quantity
-            monitored has stopped increasing; in `auto`
-            mode, the direction is automatically inferred
-            from the name of the monitored quantity.
-        min_delta: threshold for measuring the new optimum,
-            to only focus on significant changes.
-        cooldown: number of epochs to wait before resuming
-            normal operation after lr has been reduced.
-        min_lr: lower bound on the learning rate.
-    """
-
-    def __init__(self, monitor='val_loss', factor=0.1, patience=10,
-                 verbose=0, mode='auto', min_delta=1e-4, cooldown=0, min_lr=0,
-                 **kwargs):
-        super(ReduceLROnPlateau, self).__init__()
-
-        self.monitor = monitor
-        if factor >= 1.0:
-            raise ValueError('ReduceLROnPlateau does not support a factor >= 1.0.')
-        self.factor = factor
-        self.min_lr = min_lr
-        self.min_delta = min_delta
-        self.patience = patience
-        self.verbose = verbose
-        self.cooldown = cooldown
-        self.cooldown_counter = 0  # Cooldown counter.
-        self.wait = 0
-        self.best = 0
-        if mode not in ['auto', 'min', 'max']:
-            raise ValueError('Mode must be one of (auto, min, max).')
-        self.mode = mode
-        self.monitor_op = None
-
-        self._reset()
-
-    def _reset(self):
-        """Resets wait counter and cooldown counter.
-        """
-        if (self.mode == 'min' or
-                (self.mode == 'auto' and 'acc' not in self.monitor)):
-            self.monitor_op = lambda a, b: np.less(a, b - self.min_delta)
-            self.best = np.Inf
-        else:
-            self.monitor_op = lambda a, b: np.greater(a, b + self.min_delta)
-            self.best = -np.Inf
-        self.cooldown_counter = 0
-        self.wait = 0
-
-    def on_train_begin(self, logs=None):
-        self.optimiser = self.params['optimiser']
-        self.min_lrs = [self.min_lr] * len(self.optimiser.param_groups)
-        self._reset()
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        if len(self.optimiser.param_groups) == 1:
-            logs['lr'] = self.optimiser.param_groups[0]['lr']
-        else:
-            for i, param_group in enumerate(self.optimiser.param_groups):
-                logs['lr_{}'.format(i)] = param_group['lr']
-
-        current = logs.get(self.monitor)
-
-        if self.in_cooldown():
-            self.cooldown_counter -= 1
-            self.wait = 0
-
-        if self.monitor_op(current, self.best):
-            self.best = current
-            self.wait = 0
-        elif not self.in_cooldown():
-            self.wait += 1
-            if self.wait >= self.patience:
-                self._reduce_lr(epoch)
-                self.cooldown_counter = self.cooldown
-                self.wait = 0
-
-    def _reduce_lr(self, epoch):
-        for i, param_group in enumerate(self.optimiser.param_groups):
-            old_lr = float(param_group['lr'])
-            new_lr = max(old_lr * self.factor, self.min_lrs[i])
-            if old_lr - new_lr > self.min_delta:
-                param_group['lr'] = new_lr
-                if self.verbose:
-                    print('Epoch {:5d}: reducing learning rate'
-                          ' of group {} to {:.4e}.'.format(epoch, i, new_lr))
-
-    def in_cooldown(self):
-        return self.cooldown_counter > 0
-
 
 class ModelCheckpoint(Callback):
     """Save the model after every epoch.
@@ -497,7 +331,7 @@ class TriggerActionWithPatience(Callback):
         if patience == 0:
             self.is_better = lambda a, b: True
             self.step = lambda a: False
-        self.string = f'metric [{self.metric_name}] < {self.reaching_goal if self.reaching_goal is not None else self.mode}, checking every [{self.check_every} batch iters], patience: {self.patience} [corresponding to [{patience}] batch iters]'
+        self.string = f'metric [{self.metric_name}] <> {self.reaching_goal if self.reaching_goal is not None else self.mode}, checking every [{self.check_every} batch iters], patience: {self.patience} [corresponding to [{patience}] batch iters] - action: [{self.triggered_action}]'
         print(f'Set up early stopping with {self.string}')
 
     def on_batch_end(self, batch, logs=None):
@@ -525,6 +359,7 @@ class TriggerActionWithPatience(Callback):
                     self.num_bad_epochs += 1
 
             if self.num_bad_epochs >= self.patience:
+                print(f"Action triggered: {self.string}")
                 self.triggered_action(logs, self)
                 # needs to reset itself
                 self.num_bad_epochs = 0
@@ -546,17 +381,49 @@ class TriggerActionWithPatience(Callback):
                         best * min_delta / 100)
 
 
-class StopWhenMetricIs(Callback):
-    def __init__(self, value_to_reach, metric_name):
-        self.value_to_reach = value_to_reach
-        self.metric_name = metric_name
-        super().__init__()
+class CallLrScheduler(Callback):
+    def __init__(self, scheduler, step_epoch=True, step_batch=False):
+        self.scheduler = scheduler
+        self.step_epoch = step_epoch
+        self.step_batch = step_batch
+        self.last_lr = [i['lr'] for i in self.scheduler.optimizer.param_groups]
+
+    def step(self):
+        lr = self.scheduler.get_last_lr()
+        self.scheduler.step()
+        if self.last_lr !=  [i['lr'] for i in self.scheduler.optimizer.param_groups]:
+            print("learning rate: {} => {}".format(self.last_lr, [i['lr'] for i in self.scheduler.optimizer.param_groups]))
+            self.last_lr = [i['lr'] for i in self.scheduler.optimizer.param_groups]
+
 
     def on_batch_end(self, batch, logs=None):
+        if self.step_batch:
+            self.step()
+
+    def on_epoch_end(self, epoch, logs=None):
+        if self.step_epoch:
+            self.step()
+
+class StopWhenMetricIs(Callback):
+    def __init__(self, value_to_reach, metric_name, check_after_batch=True):
+        self.value_to_reach = value_to_reach
+        self.metric_name = metric_name
+        self.check_after_batch = check_after_batch
+        print(f"This session will stop when metric [{self.metric_name}] has reached the value  [{self.value_to_reach}]")
+        super().__init__()
+
+    def check_and_stop(self, logs=None):
         if logs[self.metric_name] >= self.value_to_reach:
             logs['stop'] = True
             print(f'Metric [{self.metric_name}] has reached the value [{self.value_to_reach}]. Stopping')
 
+    def on_batch_end(self, batch, logs=None):
+        if self.check_after_batch:
+            self.check_and_stop(logs)
+
+    def on_epoch_end(self, epoch, logs=None):
+        if not self.check_after_batch:
+            self.check_and_stop(logs)
 
 class SaveModel(Callback):
     def __init__(self, net, output_path, log_in_weblogger=False):
@@ -636,20 +503,54 @@ class AverageChangeMetric(RunningMetrics):
 
             self.init_classic_logs()
 
+class EndEpochTest(Callback):
+    def __init__(self, testing_loader, every_x_epochs=1, weblogger=0, log_text='', use_cuda=None, call_run=None):
+        self.testing_loader = testing_loader
+        self.use_cuda = use_cuda
+        self.every_x_epochs = every_x_epochs
+        self.weblogger = weblogger
+        self.log_text = log_text
+        self.call_run = call_run
+
+    def on_epoch_begin(self, epoch, logs=None):
+        if epoch % self.every_x_epochs == 0:
+            print(f"\nBegin of epoch {epoch}. Testing [{self.testing_loader.dataset.name_generator}]")
+            # self.model.eval()
+            mid_test_cb = [
+                           StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
+                           TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                               to_weblog=self.weblogger, log_text=self.log_text)]
+            with torch.no_grad():
+                _, logs = self.call_run(self.testing_loader,
+                                          train=False,
+                                          callbacks=mid_test_cb,
+                                          )
+            self.model.train()
+
+
+class EndEpochStats(Callback):
+    def on_epoch_begin(self, epoch, logs=None):
+        print('\nEpoch: {}'.format(epoch))
+        self.start = time.time()
+
+    def on_epoch_end(self, epoch, logs=None):
+        print("End epoch. Tot iter: [{}] - in [{:.4f}] seconds\n".format(logs['tot_iter'], time.time()-self.start))
+
 class StandardMetrics(RunningMetrics):
     def __init__(self, print_it=True, metrics_prefix='', weblogger=2, **kwargs):
         self.weblogger = weblogger
         self.print_it = print_it
         self.metrics_prefix = metrics_prefix
+        self.time = time.time()
         super().__init__(**kwargs)
-
 
     def on_training_step_end(self, batch_index, batch_logs=None):
         self.update_classic_logs(batch_logs)
         if batch_index % self.log_every == self.log_every - 1:
             batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc()
             if self.print_it:
-                print('[iter{}] loss: {}, train_acc: {}'.format(batch_logs['tot_iter'], batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
+                print('[iter{}, {:.2f}sec] loss: {:.4f}, train_acc: {:.4f}%'.format(batch_logs['tot_iter'], time.time()- self.time, batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
+                self.time = time.time()
             metric1 = 'Metric/{}/ Mean Running Loss '.format(self.log_text)
             # metric2 = 'Metric/{}/ Mean Train Accuracy train'.format(self.log_text)
             metric2 = 'accuracy'
@@ -667,6 +568,7 @@ class TotalAccuracyMetric(Metrics):
     def __init__(self, use_cuda, to_weblog=True, log_text=''):
         super().__init__(use_cuda, log_every=None, log_text=log_text)
         self.to_weblogger = to_weblog
+        self.start = time.time()
 
     def on_training_step_end(self, batch_index, batch_logs=None):
         super().on_training_step_end(batch_index, batch_logs)
@@ -674,7 +576,9 @@ class TotalAccuracyMetric(Metrics):
 
     def on_train_end(self, logs=None):
         logs['total_accuracy'] = 100.0 * self.correct_train / self.total_samples
-        print(f'Total Accuracy for [{self.total_samples}] samples, [{logs["tot_iter"]}] iter, [{self.log_text}]: {logs["total_accuracy"]}%')
+        print('Total Accuracy for [{}] samples, [{}] iter, [{}]: {:.4f}%'.format(self.total_samples, logs["tot_iter"], self.log_text, logs["total_accuracy"]), end='')
+        print(" - in {:.4f} seconds\n".format(time.time() - self.start))
+
         metric_str = 'Metric/{} Acc'.format(self.log_text)
         if self.to_weblogger == 1:
             wandb.log({metric_str: logs['total_accuracy']})
@@ -792,12 +696,12 @@ class PlotTimeElapsed(Callback):
         self.start_time = 0
 
     def on_train_begin(self, logs=None):
-        self.start_time = time()
+        self.start_time = time.time()
 
     def on_batch_end(self, batch, logs=None):
-        if batch % self.time_every == 0:
-            print(f'{logs["tot_iter"]} - Time Elapsed {self.time_every} iter: { time() - self.start_time}')
-            self.start_time = time()
+        if batch % self.time_every == self.time_every - 1:
+            print('{} - Time Elapsed {} iter: {:.4f}'.format(logs["tot_iter"], self.time_every, time.time() - self.start_time))
+            self.start_time = time.time()
 
 
 class ComputeDataFrame(Callback):

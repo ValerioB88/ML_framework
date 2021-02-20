@@ -166,6 +166,31 @@ def remap_value(x, range_source, range_target):
     return range_target[0] + (x - range_source[0]) * (range_target[1] - range_target[0]) / (range_source[1] - range_source[0])
 
 
+def print_net_info(net):
+    """
+    Get net must be reimplemented for any non abstract base class. It returns the network and the parameters to be updated during training
+    """
+    num_trainable_params = 0
+    print("Params to learn:")
+    for name, param in net.named_parameters():
+        if param.requires_grad == True:
+            print("\t", name)
+            num_trainable_params += len(param.flatten())
+    print(f"Trainable Params: {num_trainable_params}")
+
+    print('***Network***')
+    print(net)
+    print()
+
+
+def weblogging_plot_generators_info(train_loader=None, test_loaders_list=None, weblogger=1, num_batches_to_log=2):
+    if weblogger:
+        if train_loader is not None:
+            weblog_dataset_info(train_loader, log_text=train_loader.dataset.name_generator, weblogger=weblogger, num_batches_to_log=num_batches_to_log)
+        if test_loaders_list is not None:
+            for loader in test_loaders_list:
+                weblog_dataset_info(loader, log_text=loader.dataset.name_generator, weblogger=weblogger, num_batches_to_log=num_batches_to_log)
+
 def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1, num_batches_to_log=2):
     from generate_datasets.generators.translate_generator import TranslateGenerator
 
@@ -223,8 +248,13 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
     for i in range(num_batches_to_log):
         images, labels, more = next(iterator)
         plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, dataset.grayscale, weblogger)
-    # if isinstance(dataset, UnityGenMetaLearning):
-        # dataset.sampler.
+
+        # import matplotlib.pyplot as plt
+        # plt.hist(labels)
+        # import framework_utils
+        # framework_utils.imshow_batch(images[:32], labels=[f'C{c}_O{o}' for c, o in zip(labels[:32].numpy(), more[:32].numpy())], stats=dataset.stats)
+        # framework_utils.imshow_batch(images[32:], labels=[f'C{c}_O{o}' for c, o in zip(labels[32:].numpy(), more[32:].numpy())], stats=dataset.stats)
+
 
 
 def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, grayscale, weblogger=2):
@@ -410,7 +440,7 @@ def conver_tensor_to_plot(tensor, mean, std):
     return image
 
 
-def imshow_batch(inp, stats=None, title_lab=None, title_more='', maximize=True, ax=None):
+def imshow_batch(inp, stats=None, labels=None, title_more='', maximize=True, ax=None):
     if stats is None:
         mean = np.array([0.5, 0.5, 0.5])
         std = np.array([0.5, 0.5, 0.5])
@@ -435,12 +465,12 @@ def imshow_batch(inp, stats=None, title_lab=None, title_more='', maximize=True, 
             ax[idx].imshow(image, cmap='gray', vmin=0, vmax=1)
         else:
             ax[idx].imshow(image)
-        if title_lab is not None and len(title_lab) > idx:
-            if isinstance(title_lab[idx], torch.Tensor):
-                t = title_lab[idx].item()
+        if labels is not None and len(labels) > idx:
+            if isinstance(labels[idx], torch.Tensor):
+                t = labels[idx].item()
             else:
-                t = title_lab[idx]
-            ax[idx].set_title(str(title_lab[idx]) + ' ' + (title_more[idx] if title_more != '' else ''))
+                t = labels[idx]
+            ax[idx].set_title(str(labels[idx]) + ' ' + (title_more[idx] if title_more != '' else ''))
     plt.pause(0.1)
     plt.tight_layout()
     return ax

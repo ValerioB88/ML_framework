@@ -4,7 +4,7 @@ of the Keras `model.fit()` API.
 """
 import torch
 from typing import Callable, List, Union
-from callbacks import DefaultCallback, ProgressBarLogger, CallbackList, Callback
+from callbacks import ProgressBarLogger, CallbackList, Callback
 from framework_utils import make_cuda
 import framework_utils
 from torch._six import inf
@@ -56,10 +56,7 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
     images = make_cuda(images, use_cuda)
     labels = make_cuda(labels, use_cuda)
     if train:
-        # model.train()
         optimizer.zero_grad()
-    else:
-        model.eval()
 
     output_batch = model(images)
     loss = loss_fn(output_batch,
@@ -87,10 +84,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
 
     # print(f"IS CUDA: {next(model.parameters()).is_cuda}")
     if train:
-        model.train()
         optimizer.zero_grad()
-    else:
-        model.eval()
 
     logs = {}
     assert nSc == 1 and nFc == 1
@@ -124,10 +118,8 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     logs = {}
     x, y_real_labels, more = data
     if train:
-        model.train()
         optimizer.zero_grad()
-    else:
-        model.eval()
+
     # framework_utils.imshow_batch(x)
     assert len(x) == n_shot * k_way + k_way * q_queries
     y_onehot = torch.zeros(q_queries * k_way, k_way)
@@ -177,7 +169,7 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, 
     return loss, queries_real_labels, prediction_real_labels, logs
 
 
-def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, iteration_step_kwargs=None, epochs=20):
+def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, iteration_step_kwargs=None):
     torch.cuda.empty_cache()
 
     if iteration_step_kwargs is None:
@@ -187,36 +179,39 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
 
     callbacks = CallbackList(callbacks)
     callbacks.set_model(net)
-    batch_logs = {}
+    callbacks.set_optimizer(optimizer)
+    callbacks.set_loss_fn(loss_fn)
 
+    logs = {}
     callbacks.on_train_begin()
-    import time
-    start = time.time()
+
     tot_iter = 0
-    for epoch in range(epochs):
-        epoch_logs = {}
+    epoch = 0
+
+    while True:
         callbacks.on_epoch_begin(epoch)
-        print('epoch: {}'.format(epoch)) if epoch > 0 else None
+        logs['epoch'] = epoch
+        logs['tot_iter'] = 0
+
         for batch_index, data in enumerate(data_loader, 0):
 
             tot_iter += 1
-            callbacks.on_batch_begin(batch_index)
+            callbacks.on_batch_begin(batch_index, logs)
 
-            loss, y_true, y_pred, logs = iteration_step(data, net, loss_fn, optimizer, use_cuda, **iteration_step_kwargs)
+            loss, y_true, y_pred, new_batch_logs = iteration_step(data, net, loss_fn, optimizer, use_cuda, **iteration_step_kwargs)
 
-            batch_logs.update({'y_pred': y_pred, 'loss': loss.item(), 'y_true': y_true, 'tot_iter': tot_iter, 'stop': False, **logs})
-            # batch_logs.update({'tot_iter': tot_iter, 'stop': False})
-            callbacks.on_training_step_end(batch_index, batch_logs)
-            callbacks.on_batch_end(batch_index, batch_logs)
-            if tot_iter % 100 == 99:
-                print(f"100 iter: {time.time() - start}")
-                start = time.time()
-            if batch_logs['stop']:
+            logs.update({'y_pred': y_pred, 'loss': loss.item(), 'y_true': y_true, 'tot_iter': tot_iter, 'stop': False, **new_batch_logs})
+
+            callbacks.on_training_step_end(batch_index, logs)
+            callbacks.on_batch_end(batch_index, logs)
+
+            if logs['stop']:
                 break
 
-        callbacks.on_epoch_end(epoch, epoch_logs)
-        if batch_logs['stop']:
+        callbacks.on_epoch_end(epoch, logs)
+        epoch += 1
+        if logs['stop']:
             break
 
-    callbacks.on_train_end(batch_logs)
-    return net, batch_logs
+    callbacks.on_train_end(logs)
+    return net, logs
