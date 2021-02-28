@@ -1,6 +1,7 @@
 """
 Ports of Callback classes from the Keras library.
 """
+from sty import fg, bg, rs, ef
 from tqdm import tqdm
 import numpy as np
 import torch
@@ -22,7 +23,7 @@ import framework_utils as utils
 import pandas as pd
 import signal, os
 from cossim import CosSimTranslation, CosSimResize, CosSimRotate
-from neptunecontrib.api import log_chart
+# from neptunecontrib.api import log_chart
 import time
 
 class CallbackList(object):
@@ -308,9 +309,38 @@ class StopFromUserInput(Callback):
             logs['stop'] = True
             print('Stopping from user input')
 
+# class TriggerWithExpMovAverage(Callback):
+#     first_time = True
+#
+#     def __init__(self, type='min', reaching_goal=90, metric_name='nept/mean_acc', check_every=100, triggered_action=None, alpha=0.5, action_name=''):
+#         self.reaching_goal = reaching_goal
+#         self.metric_name = metric_name
+#         self.check_every = check_every
+#         self.triggered_action = triggered_action
+#         self.alpha = alpha
+#         self.exp_fun = None
+#         self.type = type
+#         self.action_name
+#         self.string = f'ExpMovingAverageAction: {self.action_name} : metric [{self.metric_name}] {self.type} than {self.reaching_goal}, checking every [{self.check_every} batch iters]'
+#         print(f'Set up action: {self.string}')
+#
+#
+#     def on_batch_end(self, batch, logs=None):
+#         if self.first_time:
+#             self.exp_fun = framework_utils.ExpMovingAverage(logs[self.metric_name], alpha=self.alpha)
+#             self.first_time = False
+#         else:
+#             if logs['tot_iter'] % self.check_every == 0:
+#                 self.exp_fun(logs[self.metric_name])
+#                 if (self.type == 'min' and self.exp_fun.avg < self.reaching_goal) or \
+#                     (self.type == 'max' and self.exp_fun.avg > self.reaching_goal):
+#                     print(f"Action triggered: {self.string}")
+#                     self.triggered_action(logs, self)
+#                     print(f"Action Triggered: {self.string}")
+#
 
 class TriggerActionWithPatience(Callback):
-    def __init__(self, mode='min', min_delta=0, patience=10, percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100, triggered_action=None):
+    def __init__(self, mode='min', min_delta=0, patience=10, percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100, triggered_action=None, action_name='', alpha=1):
         super().__init__()
         self.triggered_action = triggered_action
         self.mode = mode  # mode refers to what are you trying to reach.
@@ -318,11 +348,15 @@ class TriggerActionWithPatience(Callback):
         self.min_delta = min_delta
         self.patience = patience
         self.best = None
-        self.num_bad_epochs = 0
+        self.num_bad_iters = 0
         self.is_better = None
         self._init_is_better(mode, min_delta, percentage)
         self.reaching_goal = reaching_goal
         self.metric_name = metric_name
+        self.action_name = action_name
+        self.first_iter = True
+        self.alpha = alpha
+        self.exp_metric = None
         # reaching goal: if the metric stays higher/lower (max/min) than the goal for patience steps
         if reaching_goal is not None:
             self.best = reaching_goal
@@ -331,15 +365,20 @@ class TriggerActionWithPatience(Callback):
         if patience == 0:
             self.is_better = lambda a, b: True
             self.step = lambda a: False
-        self.string = f'metric [{self.metric_name}] <> {self.reaching_goal if self.reaching_goal is not None else self.mode}, checking every [{self.check_every} batch iters], patience: {self.patience} [corresponding to [{patience}] batch iters] - action: [{self.triggered_action}]'
-        print(f'Set up early stopping with {self.string}')
+        self.string = f'Action {self.action_name} for metric [{self.metric_name}] <> {self.reaching_goal if self.reaching_goal is not None else self.mode}, checking every [{self.check_every} batch iters], patience: {self.patience} [corresponding to [{patience}] batch iters]]' + (f' with ExpMovAvg alpha: {self.alpha}') if self.alpha != 1 else ''
+        print(f'Set up action: {self.string}')
 
     def on_batch_end(self, batch, logs=None):
-        if batch % self.check_every == 0:
-            if self.metric_name in logs:
-                metrics = logs[self.metric_name]
-            else:
-                return True
+        if self.metric_name not in logs:
+            return True
+
+        if self.first_iter:
+            self.exp_fun = framework_utils.ExpMovingAverage(logs[self.metric_name], alpha=self.alpha)
+            self.first_iter = False
+            return
+
+        if logs['tot_iter'] % self.check_every == 0:
+            metrics = self.exp_fun(logs[self.metric_name]).avg
             if self.best is None:
                 self.best = metrics
                 return
@@ -348,21 +387,23 @@ class TriggerActionWithPatience(Callback):
                 return
             if self.reaching_goal is not None:
                 if self.is_better(metrics, self.best):
-                    self.num_bad_epochs += 1
+                    self.num_bad_iters += 1
                 else:
-                    self.num_bad_epochs = 0
+                    self.num_bad_iters = 0
+
             else:
                 if self.is_better(metrics, self.best):
-                    self.num_bad_epochs = 0  # bad epochs: does not 'improve'
+                    self.num_bad_iters = 0  # bad epochs: does not 'improve'
                     self.best = metrics
                 else:
-                    self.num_bad_epochs += 1
+                    self.num_bad_iters += 1
+            print(f"Patience: {self.num_bad_iters}/{self.patience}")
 
-            if self.num_bad_epochs >= self.patience:
+            if self.num_bad_iters >= self.patience:
                 print(f"Action triggered: {self.string}")
                 self.triggered_action(logs, self)
                 # needs to reset itself
-                self.num_bad_epochs = 0
+                self.num_bad_iters = 0
 
     def _init_is_better(self, mode, min_delta, percentage):
         if mode not in {'min', 'max'}:
@@ -409,7 +450,7 @@ class StopWhenMetricIs(Callback):
         self.value_to_reach = value_to_reach
         self.metric_name = metric_name
         self.check_after_batch = check_after_batch
-        print(f"This session will stop when metric [{self.metric_name}] has reached the value  [{self.value_to_reach}]")
+        print(fg.cyan + f"This session will stop when metric [{self.metric_name}] has reached the value  [{self.value_to_reach}]" + rs.fg)
         super().__init__()
 
     def check_and_stop(self, logs=None):
@@ -478,8 +519,8 @@ class RunningMetrics(Metrics):
         super().update_classic_logs(batch_logs)
         self.running_loss += batch_logs['loss']
 
-    def compute_mean_loss_acc(self):
-        mean_loss = self.running_loss / self.log_every
+    def compute_mean_loss_acc(self, num_iter):
+        mean_loss = self.running_loss / num_iter
         mean_acc = 100 * self.correct_train / self.total_samples
         return mean_loss, mean_acc
 
@@ -488,15 +529,17 @@ class RunningMetrics(Metrics):
 
 class AverageChangeMetric(RunningMetrics):
     old_metric = None
-
+    num_iter  = 0
     def __init__(self, loss_or_acc='loss', **kwargs):
         self.loss_or_acc = loss_or_acc
         super().__init__(**kwargs)
 
     def on_training_step_end(self, batch_index, logs=None):
+        num_iter += 1
         self.update_classic_logs(logs)
-        if batch_index % self.log_every == self.log_every - 1:
-            metric = self.compute_mean_loss_acc()[0 if self.loss_or_acc == 'loss' else 1]
+        if logs['tot_iter'] % self.log_every == 0:
+            metric = self.compute_mean_loss_acc(num_iter=self.num_iter)[0 if self.loss_or_acc == 'loss' else 1]
+            self.num_iter = 0
             if self.old_metric is not None:
                 logs[{self.log_text}] = metric - self.old_metric
             self.old_metric = metric
@@ -514,29 +557,45 @@ class EndEpochTest(Callback):
 
     def on_epoch_begin(self, epoch, logs=None):
         if epoch % self.every_x_epochs == 0:
-            print(f"\nBegin of epoch {epoch}. Testing [{self.testing_loader.dataset.name_generator}]")
-            # self.model.eval()
-            mid_test_cb = [
-                           StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
-                           TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                               to_weblog=self.weblogger, log_text=self.log_text)]
-            with torch.no_grad():
-                _, logs = self.call_run(self.testing_loader,
-                                          train=False,
-                                          callbacks=mid_test_cb,
-                                          )
-            self.model.train()
+            print(fg.green, end="")
+            print("\n################ TEST ################")
+            print(rs.fg, end="")
 
+            print(f"Begin of epoch {epoch}. Testing " + fg.green + f"[{self.testing_loader.dataset.name_generator}]" + rs.fg)
+            def test(log=''):
+                mid_test_cb = [
+                    StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
+                    TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                        to_weblog=self.weblogger, log_text=self.log_text + log)]
+                with torch.no_grad():
+                    _, logs = self.call_run(self.testing_loader,
+                                            train=False,
+                                            callbacks=mid_test_cb,
+                                            )
+            print("TEST IN EVAL MODE")
+            self.model.eval()
+            test()
+
+            # print("TEST IN TRAIN MODE")
+            self.model.train()
+            # test(log=' TRAIN')
+            print(fg.green, end="")
+            print("#############################################")
+            print(rs.fg, end="")
 
 class EndEpochStats(Callback):
     def on_epoch_begin(self, epoch, logs=None):
-        print('\nEpoch: {}'.format(epoch))
+        print(fg.red + '\nEpoch: {}'.format(epoch) + rs.fg)
         self.start = time.time()
 
     def on_epoch_end(self, epoch, logs=None):
+        print(fg.red, end="")
         print("End epoch. Tot iter: [{}] - in [{:.4f}] seconds\n".format(logs['tot_iter'], time.time()-self.start))
+        print(rs.fg, end="")
 
 class StandardMetrics(RunningMetrics):
+    num_iter = 0
+
     def __init__(self, print_it=True, metrics_prefix='', weblogger=2, **kwargs):
         self.weblogger = weblogger
         self.print_it = print_it
@@ -545,11 +604,13 @@ class StandardMetrics(RunningMetrics):
         super().__init__(**kwargs)
 
     def on_training_step_end(self, batch_index, batch_logs=None):
+        self.num_iter += 1
         self.update_classic_logs(batch_logs)
-        if batch_index % self.log_every == self.log_every - 1:
-            batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc()
+        if batch_logs['tot_iter'] % self.log_every == 0:
+            batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc(num_iter=self.num_iter)
+            self.num_iter = 0
             if self.print_it:
-                print('[iter{}, {:.2f}sec] loss: {:.4f}, train_acc: {:.4f}%'.format(batch_logs['tot_iter'], time.time()- self.time, batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
+                print(('[iter{}, {:.2f}sec] loss: {:.4f}, train_acc: ' + bg.white + fg.black+ '{:.4f}%' + rs.fg+rs.bg).format(batch_logs['tot_iter'], time.time()- self.time, batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
                 self.time = time.time()
             metric1 = 'Metric/{}/ Mean Running Loss '.format(self.log_text)
             # metric2 = 'Metric/{}/ Mean Train Accuracy train'.format(self.log_text)
@@ -576,8 +637,7 @@ class TotalAccuracyMetric(Metrics):
 
     def on_train_end(self, logs=None):
         logs['total_accuracy'] = 100.0 * self.correct_train / self.total_samples
-        print('Total Accuracy for [{}] samples, [{}] iter, [{}]: {:.4f}%'.format(self.total_samples, logs["tot_iter"], self.log_text, logs["total_accuracy"]), end='')
-        print(" - in {:.4f} seconds\n".format(time.time() - self.start))
+        print((fg.cyan + 'Total Accuracy for [{}] samples, [{}] iter, ' + ef.inverse + ef.bold + '[{}]' + rs.inverse + ': ' + ef.inverse  + '{:.4f}%'  + rs.inverse + rs.bold_dim + fg.cyan + ' - in {:.4f} seconds\n' + rs.fg).format(self.total_samples, logs["tot_iter"], self.log_text, logs["total_accuracy"], time.time() - self.start))
 
         metric_str = 'Metric/{} Acc'.format(self.log_text)
         if self.to_weblogger == 1:
@@ -586,17 +646,18 @@ class TotalAccuracyMetric(Metrics):
             neptune.log_metric(metric_str, logs['total_accuracy'])
 
 class ComputeConfMatrix(Callback):
-    def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text=''):
+    def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text='', class_names=None):
         self.num_classes = num_classes
         self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
         self.log_text_plot = weblog_text
         self.reset_every = reset_every
+        self.class_names = class_names
         self.num_iter = 0
         self.weblogger = weblogger
         super().__init__()
 
     def on_training_step_end(self, batch, logs=None):
-        if self.reset_every is not None and batch % self.reset_every == 0:
+        if self.reset_every is not None and logs['tot_iter'] % self.reset_every == 0:
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
             self.num_iter = 0
         for t, p in zip(logs['y_true'].view(-1), logs['y_pred'].view(-1)):
@@ -608,7 +669,8 @@ class ComputeConfMatrix(Callback):
 
         if self.weblogger:
             figure = plt.figure(figsize=(20, 15))
-            sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".2f", annot_kws={"size": 15}, vmin=0, vmax=1)  # font size
+            sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".2f", xticklabels=self.class_names, yticklabels=self.class_names, annot_kws={"size": 15}, vmin=0, vmax=1)  # font size
+            plt.yticks(np.arange(len(self.class_names)) + 0.5, self.class_names, rotation=0, fontsize="10", va="center")
             plt.ylabel('truth')
             plt.xlabel('predicted')
             plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter), size=22)
@@ -677,7 +739,7 @@ class RollingAccEachClassWeblog(Callback):
     def on_training_step_end(self, batch, logs=None):
         for t, p in zip(logs['y_true'].view(-1), logs['y_pred'].view(-1)):
             self.confusion_matrix[t.long(), p.long()] += 1
-        if batch % self.log_every == self.log_every - 1:
+        if logs['tot_iter'] % self.log_every == 0:
             correct_class = self.confusion_matrix.diag() / self.confusion_matrix.sum(1)
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
             if correct_class is not None:
@@ -699,7 +761,7 @@ class PlotTimeElapsed(Callback):
         self.start_time = time.time()
 
     def on_batch_end(self, batch, logs=None):
-        if batch % self.time_every == self.time_every - 1:
+        if logs['tot_iter'] % self.time_every == self.time_every - 1:
             print('{} - Time Elapsed {} iter: {:.4f}'.format(logs["tot_iter"], self.time_every, time.time() - self.start_time))
             self.start_time = time.time()
 
@@ -827,46 +889,6 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
         self.is_support = None
         self.task_num = None
 
-    # def _compute_and_log_metrics(self, data_frame):
-        # def compute_azi_and_incl(row, training_camera_idx):
-        #     ## This won't really be super useful in ALL cases. For the caniddate camera, we only take the first one. And we always take the first sequence.
-        #     a = row['candidate_campos_XYZ'][0][0]
-        #     b = row['training_campos_XYZ'][0][training_camera_idx]
-        #
-        #     def get_incl_and_azi(a):
-        #         # must be unit vector
-        #         a = a / np.linalg.norm(a)
-        #         incl = np.arccos(a[2])
-        #         azi = np.arctan2(a[1], a[0])
-        #         return incl, azi
-        #
-        #     inclination = int(np.round(np.rad2deg(get_incl_and_azi(a)[0] - get_incl_and_azi(b)[0])))
-        #     azimuth = int(np.round(np.rad2deg(-(get_incl_and_azi(a)[1] - get_incl_and_azi(b)[1]))))
-        #
-        #     if azimuth < 0:
-        #         azimuth += 360
-        #
-        #     row['azimuth'] = azimuth
-        #     row['inclination'] = inclination
-        #     return row
-        #
-        # # comp_az_or = False
-        # comp_az_or = True
-        #
-        # if self.task_type == TrialType.DET_TRIAL_EDELMAN_ORTHO_HOR:
-        #     type = 'orthogonal'
-        #     training_camera_idx = 1
-        # elif self.task_type == TrialType.DET_TRIAL_EDELMAN_SAME_AXIS_HOR:
-        #     training_camera_idx = 1
-        #     type = 'same'
-        # else:
-        #     type = ''
-        #     training_camera_idx = 0
-        # if comp_az_or:
-        #     print("Computing azimuth and inclination...")
-        #     data_frame = data_frame.apply(lambda row: compute_azi_and_incl(row, training_camera_idx=training_camera_idx), axis=1)
-        #     print("done")
-        # return data_frame
 
     def _get_additional_logs(self, logs, sample_index):
         self.camera_positions_batch = np.array(logs['camera_positions'])
@@ -923,7 +945,7 @@ class ComputeDataFrame3DmetaLearning(ComputeDataFrame):
             pass
         if self.weblogger == 2:
             neptune.log_image(metric_str, mplt_fig)
-            log_chart(f'{self.log_text_plot} {metric_str}', plotly_fig)
+            # log_chart(f'{self.log_text_plot} {metric_str}', plotly_fig)
         return data_frame
 
 
@@ -1024,7 +1046,7 @@ class PlotGradientWeblog(Callback):
         self.layers = [i.split('.weight')[0] for i in self.layers]
 
     def on_training_step_end(self, batch, logs=None):
-        if batch % self.log_every == 0:
+        if logs['tot_iter'] % self.log_every == 0:
             ave_grads = []
             for n, p in self.net.named_parameters():
                 if p.requires_grad and ("bias" not in n):
@@ -1034,7 +1056,7 @@ class PlotGradientWeblog(Callback):
                         ave_grads.append(p.grad.abs().mean())
             self.grad.append(ave_grads)
 
-        if batch % self.plot_every == 0:
+        if logs['tot_iter'] % self.plot_every == 0:
             lengrad = len(self.grad[0])
             figure = plt.figure(figsize=(10, 7))
             plt.plot(np.array(self.grad).T, alpha=0.3, color="b")

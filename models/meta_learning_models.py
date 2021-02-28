@@ -64,7 +64,7 @@ class RelationNetSung(nn.Module):
         if flatten:
             self.backbone.add_module('flatten', Flatten());
 
-        self.relation_module = nn.Sequential(nn.Linear(64 * 2, 256),  # (imagesize=128/ 2^4) * 64 = 4096
+        self.relation_module = nn.Sequential(nn.Linear(128 * 2, 256),  # (imagesize=128/ 2^4) * 64 = 4096
                                              nn.BatchNorm1d(256),
                                              nn.LeakyReLU(),
                                              nn.Linear(256, 1),
@@ -74,6 +74,8 @@ class RelationNetSung(nn.Module):
         ## ToDo: Make it more general, or at least for training frames/sequence > 1!
         x, k, nSt, nFt, use_cuda = input
         emb_all = self.backbone(x)
+        emb_all = nn.AdaptiveAvgPool2d(1)(emb_all)
+
         emb_candidates = emb_all[:k]  # this only works for nSt, nFt, nSc and nFc = 1!
         emb_trainings = emb_all[k:]
         return self.relation_module(torch.cat((emb_candidates, emb_trainings), dim=1))

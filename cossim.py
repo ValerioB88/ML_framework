@@ -10,15 +10,21 @@ from generate_datasets.generators.input_image_generator import InputImagesGenera
 import matplotlib.pyplot as plt
 
 class CosSim(ABC):
-    def __init__(self, net, dataset: InputImagesGenerator):
+    def __init__(self, net, dataset: InputImagesGenerator = None, use_cuda=None):
         self.cuda = False
-        if torch.cuda.is_available():
-            self.cuda = True
+        if use_cuda is None:
+            if torch.cuda.is_available():
+                self.cuda = True
+            else:
+                self.cuda = False
+        else:
+            self.cuda = use_cuda
         self.net = net
         self.dataset = dataset
         self.only_save = ['Conv2d', 'Linear']
         self.detach_this_step = True
         self.activation = {}
+        self.setup_network()
 
     @abstractmethod
     def get_base_and_other_canvasses(self, class_num, name_class):
@@ -50,15 +56,8 @@ class CosSim(ABC):
         recursive_group(self.net)
         return all_layers
 
-    def get_cosine_similarity_one_class_random_img(self, class_num):
-        """
-        cossim: [group class idx][name feature][list of cossim for each step]
-        """
-
-        name_class = self.dataset.idx_to_class[class_num]
-
-        base_canvas, other_canvasses, x_values = self.get_base_and_other_canvasses(class_num, name_class)
-        self.net(make_cuda(base_canvas.unsqueeze(0), self.cuda))
+    def get_cosine_similarity_from_images(self, base_canvas, other_canvasses):
+        prediction_base = torch.argmax(self.net(make_cuda(base_canvas.unsqueeze(0), self.cuda))).item()
         base_activation = {}
         # base_activation = activation['one_to_last']
         for name, features in self.activation.items():
@@ -68,9 +67,10 @@ class CosSim(ABC):
 
         # cos_fun = torch.nn.CosineSimilarity(dim=1)
         cossim_net = {}
+        predictions = []
         for canvas_comparison in other_canvasses:
             canvas_comparison_activation = {}
-            self.net(make_cuda(canvas_comparison.unsqueeze(0), self.cuda))
+            predictions.append(torch.argmax(self.net(make_cuda(canvas_comparison.unsqueeze(0), self.cuda))).item())
             for name, features in self.activation.items():
                 if not np.any([i in name for i in self.only_save]):
                     continue
@@ -80,38 +80,53 @@ class CosSim(ABC):
                 # canvas_comparison_activation = features
                 cossim_net[name].append(torch.nn.CosineSimilarity(dim=0)(base_activation[name].flatten(), canvas_comparison_activation[name].flatten()).item())
         cossim_images = [torch.nn.CosineSimilarity(dim=0)(base_canvas.flatten(), c.flatten()).item() for c in other_canvasses]
+        return cossim_net, cossim_images, (prediction_base, predictions)
+
+    def get_cosine_similarity_one_class_random_img(self, class_num, dataset):
+        """
+        cossim: [group class idx][name feature][list of cossim for each step]
+        """
+
+        name_class = dataset.idx_to_class[class_num]
+
+        base_canvas, other_canvasses, x_values = self.get_base_and_other_canvasses(class_num, name_class)
+        cossim_net, cossim_images = self.get_cosine_similarity_from_images(base_canvas, other_canvasses)
         self.finalize_each_class(name_class, cossim_net, cossim_images, x_values)
         return cossim_net, cossim_images, x_values
 
-    def calculate_cossim_network(self):
-        x_value = None
-        was_train = self.net.training
+    def setup_network(self):
+        self.was_train = self.net.training
         self.net.eval()
-        ## HOOK NETWORK ACTIVATION
         all_layers = self.group_all_layers()
-        hook_lists = []
+        self.hook_lists = []
         for idx, i in enumerate(all_layers):
-            hook_lists.append(i.register_forward_hook(self.get_activation('{}: {}'.format(idx, str.split(str(i), '(')[0]))))
+            self.hook_lists.append(i.register_forward_hook(self.get_activation('{}: {}'.format(idx, str.split(str(i), '(')[0]))))
 
-        ## NOW GET COSINE SIM
+    def remove_hooks(self):
+        for h in self.hook_lists:
+            h.remove()
+        if self.was_train:
+            self.net.train()
+
+    def calculate_cossim_dataloader(self, dataset):
+        x_value = None
+        # self.setup_network()
+
         cossim_net = {}
         cossim_img = {}
-        for c in range(self.dataset.num_classes):
-            cossim_net[c], cossim_img[c], x_values = self.get_cosine_similarity_one_class_random_img(c)
+        for c in range(dataset.num_classes):
+            cossim_net[c], cossim_img[c], x_values = self.get_cosine_similarity_one_class_random_img(c, dataset)
 
-        ## REMOVE HOOKS
-        for h in hook_lists:
-            h.remove()
-        if was_train:
-            self.net.train()
+        # self.remove_hooks()
         return cossim_net, cossim_img, x_values
 
-    def get_canvas(self, image, class_num, rotation, size, center):
-        # random_center = dataset._get_translation(label, image_name, idx)
-        canvas = framework_utils.copy_img_in_canvas(image.resize(size).rotate(rotation, expand=True), self.dataset.size_canvas, center, color_canvas=get_background_color(self.dataset.background_color_type))
-        canvas, label, more = self.dataset._finalize_get_item(canvas, class_num, {'center': center})
-        canvas = self.dataset.transform(canvas)
-        return canvas
+
+    # def get_canvas(self, image, class_num, rotation, size, center):
+    #     # random_center = dataset._get_translation(label, image_name, idx)
+    #     canvas = framework_utils.copy_img_in_canvas(image.resize(size).rotate(rotation, expand=True), self.dataset.size_canvas, center, color_canvas=get_background_color(self.dataset.background_color_type))
+    #     canvas, label, more = self.dataset._finalize_get_item(canvas, class_num, {'center': center})
+    #     canvas = self.dataset.transform(canvas)
+    #     return canvas
 
 
 class CosSimTranslation(CosSim):

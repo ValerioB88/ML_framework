@@ -1,3 +1,4 @@
+from sty import fg, bg, rs, ef
 import argparse
 import os
 import cv2
@@ -17,7 +18,6 @@ from matplotlib.patches import FancyArrowPatch
 from mpl_toolkits.mplot3d import proj3d
 from collections import namedtuple
 import cloudpickle
-
 from generate_datasets.generators.input_image_generator import InputImagesGenerator
 import wandb
 desired_width = 420
@@ -29,6 +29,16 @@ pd.set_option("expand_frame_repr", False) # print cols side by side as it's supp
 pd.set_option("display.max_rows", None, "display.max_columns", None)
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+
+class ExpMovingAverage():
+    def __init__(self, start, alpha=0.5):
+        self.avg = start
+        self.alpha = alpha
+
+    def __call__(self, *args, **kwargs):
+        self.avg = self.alpha * args[0] + (1 - self.alpha) * self.avg
+        return self
 
 
 def scatter_plot_on_sphere(points, correct, title):
@@ -166,20 +176,29 @@ def remap_value(x, range_source, range_target):
     return range_target[0] + (x - range_source[0]) * (range_target[1] - range_target[0]) / (range_source[1] - range_source[0])
 
 
-def print_net_info(net):
+def print_net_info(net, weblog):
     """
     Get net must be reimplemented for any non abstract base class. It returns the network and the parameters to be updated during training
     """
     num_trainable_params = 0
+    tmp = ''
+    print(fg.yellow)
     print("Params to learn:")
     for name, param in net.named_parameters():
         if param.requires_grad == True:
-            print("\t", name)
+            tmp += "\t" + name + "\n"
+            print("\t" + name)
             num_trainable_params += len(param.flatten())
+
+    # if weblog == 2:
+    #     neptune.log_text("Network Info", f"Params to learn: {tmp}")
+    #     neptune.log_text("Trainable Params: {num_trainable_params}\n*Network*\n{net}")
+
     print(f"Trainable Params: {num_trainable_params}")
 
     print('***Network***')
     print(net)
+    print(rs.fg)
     print()
 
 

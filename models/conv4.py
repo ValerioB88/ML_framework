@@ -2,41 +2,19 @@ import torch
 import torch.nn as nn
 import collections
 import math
-
+from ML_framework.models.model_utils import conv_block
 class Conv4(torch.nn.Module):
     def __init__(self, flatten=True, track_running_stats=True):
         super(Conv4, self).__init__()
         self.feature_size = 64
         self.name = "conv4"
 
-        self.layer1 = nn.Sequential(collections.OrderedDict([
-          ('conv',    nn.Conv2d(3, 8, kernel_size=3, stride=1, padding=1, bias=False)),
-          ('bn',      nn.BatchNorm2d(8, track_running_stats=track_running_stats)),
-          ('relu',    nn.ReLU()),
-          ('avgpool', nn.AvgPool2d(kernel_size=2, stride=2))
-        ]))
-
-        self.layer2 = nn.Sequential(collections.OrderedDict([
-          ('conv',    nn.Conv2d(8, 16, kernel_size=3, stride=1, padding=1, bias=False)),
-          ('bn',      nn.BatchNorm2d(16, track_running_stats=track_running_stats)),
-          ('relu',    nn.ReLU()),
-          ('avgpool', nn.AvgPool2d(kernel_size=2, stride=2))
-        ]))
-
-        self.layer3 = nn.Sequential(collections.OrderedDict([
-          ('conv',    nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1, bias=False)),
-          ('bn',      nn.BatchNorm2d(32, track_running_stats=track_running_stats)),
-          ('relu',    nn.ReLU()),
-          ('avgpool', nn.AvgPool2d(kernel_size=2, stride=2))
-        ]))
-
-        self.layer4 = nn.Sequential(collections.OrderedDict([
-          ('conv',    nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1, bias=False)),
-          ('bn',      nn.BatchNorm2d(64, track_running_stats=track_running_stats)),
-          ('relu',    nn.ReLU()),
-          #('avgpool', nn.AvgPool2d(kernel_size=4))
-          ('glbpool', nn.AdaptiveAvgPool2d(1))
-        ]))
+        self.conv4 = nn.Sequential(conv_block(3, 8, max_pool=False, batch_norm=True, act_fun='ReLU', bias=False, avg_pool=True, track_running_stats=track_running_stats),
+                                   conv_block(8, 16, max_pool=False, batch_norm=True, act_fun='ReLU', bias=False, avg_pool=True, track_running_stats=track_running_stats),
+                                   conv_block(16, 32, max_pool=False, batch_norm=True, act_fun='ReLU', bias=False, avg_pool=True, track_running_stats=track_running_stats),
+                                   conv_block(32, 64, max_pool=False, batch_norm=True, act_fun='ReLU', bias=False, avg_pool=True, track_running_stats=track_running_stats),
+                                   conv_block(64, 128, max_pool=False, batch_norm=True, act_fun='ReLU', bias=False, avg_pool=False, track_running_stats=track_running_stats))
+                                   # conv_block(128, 128, max_pool=False, batch_norm=True, act_fun='ReLU', bias=False, avg_pool=False, track_running_stats=track_running_stats),
 
         self.is_flatten = flatten
         self.flatten = nn.Flatten()
@@ -50,9 +28,6 @@ class Conv4(torch.nn.Module):
                 m.bias.data.zero_()
 
     def forward(self, x):
-        h = self.layer1(x)
-        h = self.layer2(h)
-        h = self.layer3(h)
-        h = self.layer4(h)
+        h = self.conv4(x)
         if(self.is_flatten): h = self.flatten(h)
         return h

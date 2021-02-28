@@ -10,7 +10,7 @@ import framework_utils
 from torch._six import inf
 from models.sequence_learner import SequenceMatchingNetSimple
 import framework_utils
-from torchviz import make_dot
+# from torchviz import make_dot
 import matplotlib.pyplot as plt
 EPSILON = 1e-8
 
@@ -68,6 +68,8 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
     predicted = torch.argmax(output_batch, -1)
     if train:
         loss.backward()
+        if torch.isnan(loss):
+            stop=1
         optimizer.step()
     return loss, labels, predicted, logs
 
@@ -195,7 +197,6 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
 
         for batch_index, data in enumerate(data_loader, 0):
 
-            tot_iter += 1
             callbacks.on_batch_begin(batch_index, logs)
 
             loss, y_true, y_pred, new_batch_logs = iteration_step(data, net, loss_fn, optimizer, use_cuda, **iteration_step_kwargs)
@@ -207,6 +208,8 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
 
             if logs['stop']:
                 break
+            tot_iter += 1
+
 
         callbacks.on_epoch_end(epoch, logs)
         epoch += 1

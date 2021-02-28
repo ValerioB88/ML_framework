@@ -1,3 +1,4 @@
+from sty import fg, bg, ef, rs
 import collections
 import torchvision
 import cloudpickle
@@ -41,14 +42,14 @@ class Experiment(ABC):
         self.net = None
         self.current_run = -1
         self.seed = PARAMS['seed']
-
-        random.seed(self.seed)
-        np.random.seed(self.seed)
-        torch.manual_seed(self.seed)
-        torch.cuda.manual_seed(self.seed)
-        torch.cuda.manual_seed_all(self.seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        if self.seed is not None:
+            random.seed(self.seed)
+            np.random.seed(self.seed)
+            torch.manual_seed(self.seed)
+            torch.cuda.manual_seed(self.seed)
+            torch.cuda.manual_seed_all(self.seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
         self.num_runs = PARAMS['num_runs']  # this is not used here, and it shouldn't be here, but for now we are creating a weblogger session when an Experiment is created, and we want to save this as a parameter, so we need to do it here.
         inf_if_minus_one = lambda p: np.inf if p == -1 else p
@@ -79,6 +80,9 @@ class Experiment(ABC):
         self.console_check_every = 100
         if self.force_cuda:
             self.use_cuda = True
+        elif self.force_cuda == 0:
+            print("Cuda Forcesully Disabled")
+            self.use_cuda = False
         list_tags = []
         if self.additional_tags is not None:
             [list_tags.append(i) for i in self.additional_tags.split('_') if i != 'emptytag']
@@ -100,7 +104,7 @@ class Experiment(ABC):
         self.optimizer = optimizer
 
     def parse_arguments(self, parser):
-        parser.add_argument('-seed', "--seed", type=int, default=1)
+        parser.add_argument('-seed', "--seed", type=int, default=None)
         parser.add_argument("-expname", "--experiment_name",
                             help="Name of the experiment session, used as a name in the weblogger",
                             type=str,
@@ -110,9 +114,9 @@ class Experiment(ABC):
                             type=int,
                             default=1)
         parser.add_argument("-fcuda", "--force_cuda",
-                            help="Force to run it with cuda enabled (for testing)",
+                            help="Force to run it with cuda enabled or disabled (1/0). Set None to check if the GPU is available",
                             type=int,
-                            default=0)
+                            default=None)
         parser.add_argument("-grayscale", "--grayscale",
                             help="Set the grayscale flag to true",
                             type=int,
@@ -180,7 +184,7 @@ class Experiment(ABC):
         print('Run Number {}'.format(self.current_run))
 
     def finalize_init(self, PARAMS, list_tags):
-
+        print(fg.magenta)
         print('**LIST_TAGS**:')
         print(list_tags)
         print('***PARAMS***')
@@ -188,7 +192,7 @@ class Experiment(ABC):
             list_tags.append('LOCALTEST')
 
         for i in sorted(PARAMS.keys()):
-            print(f'\t{i} : {PARAMS[i]}')
+            print(f'\t{i} : ' + ef.inverse + f'{PARAMS[i]}' + rs.inverse)
         if self.weblogger == 1:
             a = time.time()
             wandb.init(name=self.experiment_name, project=self.project_name, tags=list_tags, group=self.group_name, config=PARAMS)
@@ -199,7 +203,7 @@ class Experiment(ABC):
             neptune.create_experiment(name=self.experiment_name,
                                       params=PARAMS,
                                       tags=list_tags)
-
+        print(rs.fg)
         self.new_run()
 
 
@@ -232,11 +236,14 @@ class Experiment(ABC):
                                       to_weblog=self.weblogger, log_text=log_text)]
 
         if self.stop_when_train_acc_is != np.inf:
-            all_cb += ([TriggerActionWithPatience(min_delta=0.01, patience=800, percentage=True, mode='max',
+            all_cb += (
+                [TriggerActionWithPatience(min_delta=0.01, patience=800, percentage=True, mode='max',
                                       reaching_goal=self.stop_when_train_acc_is,
                                       metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
                                       check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
-                                      triggered_action=stop)])  # once reached a certain accuracy
+                                      triggered_action=stop,
+                                      action_name='Early Stopping',
+                                      alpha=0.5)])  # once reached a certain accuracy
         if self.max_epochs != np.inf:
             all_cb +=([StopWhenMetricIs(value_to_reach=self.max_epochs - 1, metric_name='epoch', check_after_batch=False)])  # you could use early stopping for that
 
@@ -248,7 +255,9 @@ class Experiment(ABC):
                                             reaching_goal=None,
                                             metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
                                             check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
-                                            triggered_action=stop)])  # for stagnation
+                                            triggered_action=stop,
+                                            action_name='Early Stopping',
+                                            alpha=0.5)])  # for stagnation
         # all_cb += ([SaveModel(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
         if test_loaders is not None:
             for t in test_loaders:
@@ -311,8 +320,6 @@ class Experiment(ABC):
         return all_cb
 
 
-
-
     def test(self, net, test_loaders_list, callbacks=None, log_text: List[str] = None):
         self.net = net
         if self.use_cuda:
@@ -320,7 +327,7 @@ class Experiment(ABC):
         self.net.eval()
         if log_text is None:
             log_text = [f'{d.dataset.name_generator}' for d in test_loaders_list]
-        print(f"\n**Testing Started** [{log_text}]")
+        print(fg.yellow + f"\n**Testing Started** [{log_text}]" + rs.fg)
 
         self.experiment_loaders[self.current_run]['testing'].append(test_loaders_list)
         save_dataframe = True if self.output_filename is not None else False
@@ -334,7 +341,7 @@ class Experiment(ABC):
                 strg = '1 epoch'
             else:
                 strg =  f'{np.min((self.max_iterations_testing, len(testing_loader.dataset)))} iterations'
-            print(f'\nTesting {idx+1}/{len(test_loaders_list)}: [{testing_loader.dataset.name_generator}]: {strg}')
+            print(fg.green + f'\nTesting {idx+1}/{len(test_loaders_list)}: ' + ef.inverse + ef.bold + f'[{testing_loader.dataset.name_generator}]' + rs.bold_dim + rs.inverse + f': {strg}' + rs.fg)
             all_cb = self.prepare_test_callbacks(log_text[idx] if log_text is not None else '', testing_loader, save_dataframe)
             all_cb += (callbacks or [])
             with torch.no_grad():
@@ -401,7 +408,8 @@ class SupervisedLearningExperiment(Experiment):
         all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
         all_cb += [ComputeConfMatrix(num_classes=num_classes,
                                      weblogger=self.weblogger,
-                                     weblog_text=log_text)]
+                                     weblog_text=log_text,
+                                     class_names=testing_loader.dataset.classes)]
         all_cb += ([ComputeDataFrame(num_classes,
                                      self.use_cuda,
                                      self.network_name, self.size_canvas,
@@ -524,7 +532,8 @@ class SequentialMetaLearningExp(Experiment):
         # This ComputeConfMatrix is used for matching, that's why num_class = 2
         all_cb += [ComputeConfMatrix(num_classes=2,
                                      weblogger=self.weblogger,
-                                     weblog_text=log_text)]
+                                     weblog_text=log_text,
+                                     class_names=train_loader.dataset.classes)]
         return all_cb
 
     def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
@@ -532,16 +541,18 @@ class SequentialMetaLearningExp(Experiment):
         if save_dataframe:
             all_cb += [ComputeConfMatrix(num_classes=2,
                                          weblogger=self.weblogger,
-                                         weblog_text=log_text),
+                                         weblog_text=log_text,
+                                         class_names=testing_loader.dataset.classes),
                        ]
         return all_cb
 
 
-def with_dataset_name(class_obj):
+def with_dataset_name(class_obj, add_tags=True):
     class BuildDatasetExp(class_obj):
         def __init__(self, **kwargs):
             self.name_dataset_training = None
             self.name_datasets_testing = None
+            self.add_tags = add_tags
             super().__init__(**kwargs)
 
         def parse_arguments(self, parser):
@@ -563,9 +574,9 @@ def with_dataset_name(class_obj):
                 self.name_dataset_training = None
             if self.output_filename is None and self.name_datasets_testing is not None:
                 assert False, "You provided some dataset for testing, but no output. This is almost always a mistake"
-
-            list_tags.append(f"tr{self.name_dataset_training.split('data')[-1]}") if self.name_dataset_training is not None else None
-            [list_tags.append(f"te{i.split('data')[-1]}") for i in self.name_datasets_testing.split('_')] if self.name_datasets_testing is not None else None
+            if self.add_tags:
+                list_tags.append(f"tr{self.name_dataset_training.split('data')[-1]}") if self.name_dataset_training is not None else None
+                [list_tags.append(f"te{i.split('data')[-1]}") for i in self.name_datasets_testing.split('_')] if self.name_datasets_testing is not None else None
 
             if self.name_datasets_testing is not None:
                 self.name_datasets_testing = str.split(self.name_datasets_testing, "_")
