@@ -50,7 +50,7 @@ def clip_grad_norm_(parameters, max_norm, norm_type=2):
     return total_norm
 
 
-def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
+def standard_net_step(data, model, loss_fn, optimizer, use_cuda, loader, train):
     logs = {}
     images, labels, more = data
     images = make_cuda(images, use_cuda)
@@ -59,22 +59,24 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, train):
         optimizer.zero_grad()
 
     output_batch = model(images)
+
+    # framework_utils.imshow_batch(images, stats=loader.dataset.stats)
     loss = loss_fn(output_batch,
                    labels)
     logs['output'] = output_batch
-    logs['more'] = more
-    logs['images'] = images
+    logs.update(more)
+    # logs['more'] = more
+    # logs['images'] = images
 
     predicted = torch.argmax(output_batch, -1)
     if train:
         loss.backward()
-        if torch.isnan(loss):
-            stop=1
         optimizer.step()
+
     return loss, labels, predicted, logs
 
 
-def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, optimizer, use_cuda, train, dataset, concatenate=False):
+def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, optimizer, use_cuda, loader, train, concatenate=False):
     k = dataset.sampler.k
     nSc = dataset.sampler.nSc
     nSt = dataset.sampler.nSt
@@ -116,7 +118,7 @@ def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, o
     return loss, y_matching_correct, y_matching_predicted, logs
 
 
-def relation_net_step(data, model, loss_fn, optimizer, use_cuda, train, n_shot, k_way, q_queries, concatenate=False, dataset=None):
+def relation_net_step(data, model, loss_fn, optimizer, use_cuda, loader, train, n_shot, k_way, q_queries, concatenate=False):
     logs = {}
     x, y_real_labels, more = data
     if train:
@@ -205,7 +207,6 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
 
             callbacks.on_training_step_end(batch_index, logs)
             callbacks.on_batch_end(batch_index, logs)
-
             if logs['stop']:
                 break
             tot_iter += 1

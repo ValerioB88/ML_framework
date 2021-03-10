@@ -16,17 +16,16 @@ from callbacks import *
 import framework_utils as utils
 from models.meta_learning_models import MatchingNetwork, RelationNetSung, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
 from models.sequence_learner import *
-from models.FCnets import FC4
 from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
 import time
 import wandb
 import random
+from torch.optim.lr_scheduler import MultiStepLR
 
-# from wandb import magic
 
 class Experiment(ABC):
-    def __init__(self, experiment_class_name='default_name', parser=None, additional_tags=None):
+    def __init__(self, experiment_class_name='default_name', parser=None, exp_tags=None, **kwargs):
         self.use_cuda = False
         self.loss_fn = None
         self.optimizer = None
@@ -34,11 +33,21 @@ class Experiment(ABC):
         if torch.cuda.is_available():
             print('Using cuda - you are probably on the server')
             self.use_cuda = True
+
         if parser is None:
             parser = argparse.ArgumentParser(allow_abbrev=False)
         parser = self.parse_arguments(parser)
-
-        PARAMS = vars(parser.parse_known_args()[0])
+        if len(kwargs) == 0:
+            print("Running Experiment in " + ef.inverse + "MAIN" + rs.inverse + " mode. Any keyword params will be ignored")
+            PARAMS = vars(parser.parse_known_args()[0])
+        else:
+            print("Running experiment in " + ef.inverse + "SCRIPT" + rs.inverse + " mode. Command line arguments will have the precedence over keywords arguments.")
+            PARAMS = vars(parser.parse_known_args()[0])
+            # only update the parser args that are NOT the defaults (so the one actually passed by user
+            kwargs.update({k:v for k,v  in PARAMS.items() if parser.get_default(k)!=v })
+            # Update with default arguments for all the arguments not passed by kwargs
+            kwargs.update({k:v for k,v in PARAMS.items() if k not in kwargs})
+            PARAMS = kwargs
         self.net = None
         self.current_run = -1
         self.seed = PARAMS['seed']
@@ -72,8 +81,15 @@ class Experiment(ABC):
         self.project_name = PARAMS['project_name']
         self.experiment_name = PARAMS['experiment_name']
         self.grayscale = bool(PARAMS['grayscale'])
+        self.use_device_num = PARAMS['use_device_num']
+        if self.use_cuda:
+            torch.cuda.set_device(self.use_device_num)
+            PARAMS['device_name'] = torch.cuda.get_device_name(self.use_device_num)
+        else:
+            PARAMS['device_name'] = 'cpu'
+        print(fg.yellow + f"Device Name: " + ef.inverse + f"[{PARAMS['device_name']}]" + rs.inverse + ((f' - Selected device num: ' + ef.bold + f'{self.use_device_num}' + rs.bold_dim) if self.use_cuda else '') + rs.fg);
 
-        self.experiment_data = {}
+        self.test_results_seed = {}
         self.experiment_loaders = {}  # we separate data from loaders because loaders are pickled objects and may broke when module name changes. If this happens, at least we preserve the data. We generally don't even need the loaders much.
 
         self.weblog_check_every = 5
@@ -84,12 +100,13 @@ class Experiment(ABC):
             print("Cuda Forcesully Disabled")
             self.use_cuda = False
         list_tags = []
+        list_tags.extend(exp_tags) if exp_tags is not None else None
+
         if self.additional_tags is not None:
-            [list_tags.append(i) for i in self.additional_tags.split('_') if i != 'emptytag']
-        list_tags.extend(additional_tags) if additional_tags is not None else None
+            [list_tags.append(i) for i in self.additional_tags.split('_') if i != 'emptytag' and i != '']
         list_tags.append('ptvanilla') if self.pretraining == 'vanilla' else None
         list_tags.append('ptImageNet') if self.pretraining == 'ImageNet' else None
-        list_tags.append(self.network_name)
+        # list_tags.append(self.network_name)
         list_tags.append('lr{}'.format("{:2f}".format(self.learning_rate).split(".")[1])) if self.learning_rate is not None else None
         list_tags.append('gray') if self.grayscale else None
         if self.max_iterations is None:
@@ -117,6 +134,10 @@ class Experiment(ABC):
                             help="Force to run it with cuda enabled or disabled (1/0). Set None to check if the GPU is available",
                             type=int,
                             default=None)
+        parser.add_argument("-use_device_num", "--use_device_num",
+                            help="Use selected device (int)",
+                            type=int,
+                            default=0)
         parser.add_argument("-grayscale", "--grayscale",
                             help="Set the grayscale flag to true",
                             type=int,
@@ -178,7 +199,7 @@ class Experiment(ABC):
 
     def new_run(self):
         self.current_run += 1
-        self.experiment_data[self.current_run] = {}
+        self.test_results_seed[self.current_run] = {}
         self.experiment_loaders[self.current_run] = {'training': [],
                                                      'testing': []}
         print('Run Number {}'.format(self.current_run))
@@ -206,7 +227,6 @@ class Experiment(ABC):
         print(rs.fg)
         self.new_run()
 
-
     @abstractmethod
     def call_run(self, loader, callbacks=None, train=True):
         pass
@@ -220,48 +240,57 @@ class Experiment(ABC):
             logs['stop'] = True
             print('Early Stopping')
 
-
         num_classes = self._get_num_classes(train_loader)
 
         all_cb = [
-                  EndEpochStats(),
-                  StandardMetrics(log_every=self.console_check_every, print_it=True,
-                                        use_cuda=self.use_cuda,
-                                        weblogger=0, log_text=log_text,
-                                        metrics_prefix='cnsl'),
+            EndEpochStats(),
+            StandardMetrics(log_every=self.console_check_every, print_it=True,
+                            use_cuda=self.use_cuda,
+                            weblogger=0, log_text=log_text,
+                            metrics_prefix='cnsl'),
 
-                  StopFromUserInput(),
-                  # PlotTimeElapsed(time_every=100),
-                  TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_weblog=self.weblogger, log_text=log_text)]
+            StopFromUserInput(),
+            # PlotTimeElapsed(time_every=100),
+            TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                to_weblog=None, log_text=log_text)]
 
         if self.stop_when_train_acc_is != np.inf:
             all_cb += (
-                [TriggerActionWithPatience(min_delta=0.01, patience=800, percentage=True, mode='max',
-                                      reaching_goal=self.stop_when_train_acc_is,
-                                      metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
-                                      check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
-                                      triggered_action=stop,
-                                      action_name='Early Stopping',
-                                      alpha=0.5)])  # once reached a certain accuracy
+                [TriggerActionWithPatience(mode='max', min_delta=0.01,
+                                           patience=800, min_delta_is_percentage=True,
+                                           reaching_goal=self.stop_when_train_acc_is,
+                                           metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
+                                           check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
+                                           triggered_action=stop,
+                                           action_name='Early Stopping', alpha=0.1,
+                                           weblogger=2)])  # once reached a certain accuracy
         if self.max_epochs != np.inf:
-            all_cb +=([StopWhenMetricIs(value_to_reach=self.max_epochs - 1, metric_name='epoch', check_after_batch=False)])  # you could use early stopping for that
+            all_cb += ([StopWhenMetricIs(value_to_reach=self.max_epochs - 1, metric_name='epoch', check_after_batch=False)])  # you could use early stopping for that
 
         if self.max_iterations != np.inf:
             all_cb += ([StopWhenMetricIs(value_to_reach=self.max_iterations - 1, metric_name='tot_iter')])  # you could use early stopping for that
-
         if self.patience_stagnation != np.inf:
-            all_cb += ([TriggerActionWithPatience(min_delta=0.01, patience=self.patience_stagnation, percentage=True, mode='min',
-                                            reaching_goal=None,
-                                            metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
-                                            check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
-                                            triggered_action=stop,
-                                            action_name='Early Stopping',
-                                            alpha=0.5)])  # for stagnation
+            all_cb += ([TriggerActionWithPatience(mode='min',
+                                                  min_delta=1,
+                                                  patience=self.patience_stagnation,
+                                                  min_delta_is_percentage=True, reaching_goal=None,
+                                                  metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
+                                                  check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
+                                                  triggered_action=stop, action_name='Early Stopping', alpha=0.1,
+                                                  weblogger=2)])  # for stagnation
+        # Extra Stopping Rule. When loss is 0, just stop.
+        all_cb += ([TriggerActionWithPatience(mode='min',
+                                              min_delta=0,
+                                              patience=200,
+                                              min_delta_is_percentage=True, reaching_goal=0,
+                                              metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
+                                              check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
+                                              triggered_action=stop, action_name='Stop with Loss=0',
+                                              weblogger=2)])
+
         # all_cb += ([SaveModel(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
         if test_loaders is not None:
-            for t in test_loaders:
-                all_cb += ([EndEpochTest(testing_loader=t, every_x_epochs=50, weblogger=self.weblogger, log_text=f'test {t.dataset.name_generator}', use_cuda=self.use_cuda, call_run=self.call_run)])
+            all_cb += ([DuringTrainingTest(testing_loaders=test_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, multiple_sec_of_test_time=4, weblogger=self.weblogger, log_text='test during train', use_cuda=self.use_cuda, call_run=self.call_run)])
 
         if self.weblogger:
             all_cb += [StandardMetrics(log_every=self.weblog_check_every, print_it=False,
@@ -272,7 +301,6 @@ class Experiment(ABC):
 
         return all_cb
 
-
     def _get_num_classes(self, loader):
         return loader.dataset.num_classes
 
@@ -280,7 +308,7 @@ class Experiment(ABC):
         print(f"**Training** [{log_text}]")
         self.net = self.get_net(new_num_classes=self._get_num_classes(train_loader))
         if not self.optimizer or not self.loss_fn:
-                assert False, "Optimizer or Loss Function not set"
+            assert False, "Optimizer or Loss Function not set"
         self.experiment_loaders[self.current_run]['training'].append(train_loader)
         all_cb = self.prepare_train_callbacks(log_text, train_loader, test_loaders=test_loaders)
 
@@ -295,36 +323,31 @@ class Experiment(ABC):
                                   )
         return net
 
-    def finalize_test(self, df_testing, conf_mat, accuracy, id_text):
-        self.experiment_data[self.current_run]['df_testing'] = df_testing
-        self.experiment_data[self.current_run]['conf_mat_acc'] = conf_mat
-        self.experiment_data[self.current_run]['accuracy'] = accuracy
-        self.experiment_data[self.current_run]['id_text'] = id_text
 
     def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
         all_cb = [
-                   StandardMetrics(log_every=3000, print_it=True,
-                                  use_cuda=self.use_cuda,
-                                  weblogger=0, log_text=log_text,
-                                  metrics_prefix='cnsl'),
-                  PlotTimeElapsed(time_every=3000),
+            StandardMetrics(log_every=3000, print_it=True,
+                            use_cuda=self.use_cuda,
+                            weblogger=0, log_text=log_text,
+                            metrics_prefix='cnsl'),
+            PlotTimeElapsed(time_every=3000),
 
-                  StopFromUserInput(),
-                  StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),  # you could use early stopping for that
+            StopFromUserInput(),
+            StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),  # you could use early stopping for that
 
             TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                      to_weblog=self.weblogger, log_text=log_text)]
+                                to_weblog=self.weblogger, log_text=log_text)]
 
         if self.max_iterations_testing != np.inf:
             all_cb += ([StopWhenMetricIs(value_to_reach=self.max_iterations_testing, metric_name='tot_iter')])
         return all_cb
 
-
     def test(self, net, test_loaders_list, callbacks=None, log_text: List[str] = None):
         self.net = net
         if self.use_cuda:
             self.net.cuda()
-        self.net.eval()
+        self.net.eval() # TODO: WATCH OUT!!!
+        # print(fg.red + "WATCH OUT! EVAL MODE IS ON!! THIS SHOULD BE OFF!!!" + rs.fg)
         if log_text is None:
             log_text = [f'{d.dataset.name_generator}' for d in test_loaders_list]
         print(fg.yellow + f"\n**Testing Started** [{log_text}]" + rs.fg)
@@ -336,39 +359,48 @@ class Experiment(ABC):
         accuracy_all_tests = []
         text = []
         df_testing = []
+        results = {}
         for idx, testing_loader in enumerate(test_loaders_list):
-            if self.max_iterations_testing==np.inf:
+            results[log_text[idx]] = {}
+            if self.max_iterations_testing == np.inf:
                 strg = '1 epoch'
             else:
-                strg =  f'{np.min((self.max_iterations_testing, len(testing_loader.dataset)))} iterations'
-            print(fg.green + f'\nTesting {idx+1}/{len(test_loaders_list)}: ' + ef.inverse + ef.bold + f'[{testing_loader.dataset.name_generator}]' + rs.bold_dim + rs.inverse + f': {strg}' + rs.fg)
+                strg = f'{np.min((self.max_iterations_testing, len(testing_loader.dataset)))} iterations'
+            print(fg.green + f'\nTesting {idx + 1}/{len(test_loaders_list)}: ' + ef.inverse + ef.bold + f'[{testing_loader.dataset.name_generator}]' + rs.bold_dim + rs.inverse + f': {strg}' + rs.fg)
             all_cb = self.prepare_test_callbacks(log_text[idx] if log_text is not None else '', testing_loader, save_dataframe)
             all_cb += (callbacks or [])
             with torch.no_grad():
                 net, logs = self.call_run(testing_loader,
                                           train=False,
                                           callbacks=all_cb)
-            conf_mat_acc_all_tests.append(logs['conf_mat_acc'])
-            accuracy_all_tests.append(logs['total_accuracy'])
-            text.append(log_text[idx])
+
+            results[log_text[idx]]['total_accuracy'] = logs['total_accuracy']
+            results[log_text[idx]]['conf_mat_acc'] = logs['conf_mat_acc']
             if save_dataframe and 'dataframe' in logs:
-                df_testing.append(logs['dataframe'])
+                results[log_text[idx]]['df_testing'] = logs['dataframe']
+
             if 'dataframe' not in logs:
                 print("No Dataframe Saved (probably no callback for computing the dataframe was specified")
 
-        self.finalize_test(df_testing, conf_mat_acc_all_tests, accuracy_all_tests, text)
+        self.finalize_test(results)
 
         return df_testing, conf_mat_acc_all_tests, accuracy_all_tests
 
-    def save_all_runs(self):
+    def finalize_test(self, results):
+        self.test_results_seed[self.current_run] = results
+        self.test_results_seed[self.current_run]['seed'] = self.seed
+
+    def save_all_runs_and_stop(self):
         if self.output_filename is not None:
             result_path_data = self.output_filename
             result_path_loaders = os.path.dirname(result_path_data) + '/loaders_' + os.path.basename(result_path_data)
             pathlib.Path(os.path.dirname(result_path_data)).mkdir(parents=True, exist_ok=True)
-            cloudpickle.dump(self.experiment_data, open(result_path_data, 'wb'))
-            print('Saved data in {}, \nSaved loaders in [nope]'.format(result_path_data))  #result_path_loaders))
+            cloudpickle.dump(self.test_results_seed, open(result_path_data, 'wb'))
+            print('Saved data in {}, \nSaved loaders in [nope]'.format(result_path_data))  # result_path_loaders))
         else:
             Warning('Results path is not specified!')
+        if self.weblogger == 2:
+            neptune.stop()
 
 
 class SupervisedLearningExperiment(Experiment):
@@ -387,8 +419,7 @@ class SupervisedLearningExperiment(Experiment):
 
     def finalize_init(self, PARAMS, list_tags):
         self.batch_size = PARAMS['batch_size']
-
-        list_tags.append(f'bs{self.batch_size}') if self.batch_size != 32 else None
+        # list_tags.append(f'bs{self.batch_size}') if self.batch_size != 32 else None
         super().finalize_init(PARAMS, list_tags)
 
     def call_run(self, loader, train=True, callbacks=None):
@@ -396,13 +427,13 @@ class SupervisedLearningExperiment(Experiment):
                    use_cuda=self.use_cuda,
                    net=self.net,
                    callbacks=callbacks,
-                   loss_fn=self.loss_fn, # torch.nn.CrossEntropyLoss(),
-                   optimizer=self.optimizer, #torch.optim.SGD(params_to_update, lr=0.1, momentum=0.9),
+                   loss_fn=self.loss_fn,  # torch.nn.CrossEntropyLoss(),
+                   optimizer=self.optimizer,  # torch.optim.SGD(params_to_update, lr=0.1, momentum=0.9),
                    iteration_step=standard_net_step,
-                   iteration_step_kwargs={'train': train},
+                   iteration_step_kwargs={'train': train, 'loader': loader},
                    )
 
-    def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
+    def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe, dataframe_saver=None):
         num_classes = self._get_num_classes(testing_loader)
 
         all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
@@ -410,11 +441,16 @@ class SupervisedLearningExperiment(Experiment):
                                      weblogger=self.weblogger,
                                      weblog_text=log_text,
                                      class_names=testing_loader.dataset.classes)]
-        all_cb += ([ComputeDataFrame(num_classes,
-                                     self.use_cuda,
-                                     self.network_name, self.size_canvas,
-                                     weblogger=self.weblogger, log_text_plot=log_text)]
-                   if save_dataframe else[])
+        if save_dataframe and dataframe_saver is None:
+            all_cb += ([GenericDataFrameSaver(num_classes,
+                                              self.use_cuda,
+                                              self.network_name, self.size_canvas,
+                                              weblogger=self.weblogger, log_text_plot=log_text)])
+        if save_dataframe and dataframe_saver is not None:
+            all_cb += ([dataframe_saver(num_classes,
+                                              self.use_cuda,
+                                              self.network_name, self.size_canvas,
+                                              weblogger=self.weblogger, log_text_plot=log_text)])
         return all_cb
 
     @abstractmethod
@@ -436,6 +472,102 @@ class SupervisedLearningExperiment(Experiment):
         #                                          weblogger=self.weblogger)]
         return all_cb
 
+
+class SaveModelBackbone(Callback):
+    def __init__(self, net, output_path, log_in_weblogger=False):
+        self.output_path = output_path
+        self.net = net
+        super().__init__()
+
+    def on_train_end(self, logs=None):
+        if self.output_path is not None:
+            pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
+            print('Saving model in {}'.format(self.output_path))
+            torch.save({'full': self.net.state_dict(),
+                        'backbone': self.net.backbone.state_dict(),
+                        'relation_module': self.net.relation_module.state_dict() if 'relation_module' in self.net._modules else None,
+                        'classifier': self.net.classifier.state_dict() if 'classifier' in self.net._modules else None
+                        }, self.output_path)
+
+def create_backbone_exp(obj_class):
+    class BackboneExp(obj_class):
+        def __init__(self, **kwargs):
+            self.backbone_name = None
+            self.pretraining_backbone = None
+            self.freeze_backbone = None
+            super().__init__(**kwargs)
+
+        def parse_arguments(self, parser):
+            super().parse_arguments(parser)
+            parser.add_argument("-bkbn", "--backbone_name",
+                                help="The network structure used as a backbone [conv4-64], [conv5-128], [conv6-128], [conv6-256]",
+                                type=str,
+                                default=None)
+
+            parser.add_argument("-ptb", "--pretraining_backbone",
+                                help="The path for the backbone pretraining",
+                                type=str,
+                                default='vanilla')
+
+            parser.add_argument("-freeze_bkbn", "--freeze_backbone",
+                                help="",
+                                type=lambda x: bool(int(x)),
+                                default=False)
+
+
+            return parser
+
+        def finalize_init(self, PARAMS, list_tags):
+            self.freeze_backbone = PARAMS['freeze_backbone']
+            self.backbone_name = PARAMS['backbone_name']
+            self.pretraining_backbone = PARAMS['pretraining_backbone']
+
+            list_tags.append(f'bkbn{self.backbone_name}') if self.backbone_name is not None else None
+            list_tags.append('bkbnfrozen') if self.freeze_backbone else None
+            list_tags.append(f'bkbnpretrained' if self.pretraining_backbone != 'vanilla' else 'bkbnvanilla')
+
+            super().finalize_init(PARAMS, list_tags)
+
+        def prepare_train_callbacks(self, log_text, train_loader, test_loaders=None):
+            all_cb = super().prepare_train_callbacks(log_text, train_loader, test_loaders=test_loaders)
+            # This ComputeConfMatrix is used for matching, that's why num_class = 2
+            all_cb = [i for i in all_cb if not isinstance(i, SaveModel)]  # eliminate old SaveModel
+            all_cb += ([SaveModelBackbone(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
+            if self.max_epochs != np.inf:
+                all_cb += ([CallLrScheduler(scheduler=MultiStepLR(self.optimizer, [int(self.max_epochs/2), int(self.max_epochs * 0.75)], gamma=0.1), step_epoch=True, step_batch=False)])
+            return all_cb
+
+        def finish_get_net(self):
+            self.net = self.pretraining_backbone_or_full()
+
+            if self.freeze_backbone:
+                print(fg.red + "Freezing Backbone" + rs.fg)
+                for param in self.net.backbone.parameters():
+                    param.requires_grad = False
+
+            framework_utils.print_net_info(self.net, self.weblogger)
+            self.net.cuda() if self.use_cuda else None
+            return self.net, self.net.parameters()
+
+        def pretraining_backbone_or_full(self):
+            if self.pretraining_backbone != 'vanilla':
+                if os.path.isfile(self.pretraining_backbone):
+                    self.net.backbone.load_state_dict(torch.load(self.pretraining_backbone, map_location='cuda' if self.use_cuda else 'cpu')['backbone'])
+                    print(fg.red + f"Loaded backbone model from {self.pretraining_backbone}" + rs.fg)
+                else:
+                    assert False, f"Pretraining Backbone not found {self.pretraining_backbone}"
+
+            if self.pretraining != 'vanilla':
+                if os.path.isfile(self.pretraining):
+                    ww = torch.load(self.pretraining, map_location='cuda' if self.use_cuda else 'cpu')['full']
+                    self.net.load_state_dict(ww)
+                    print(fg.red + f"Loaded full model from {self.pretraining}" + rs.fg)
+                else:
+                    assert False, f"Pretraining path not found {self.pretraining}"
+
+            return self.net
+
+    return BackboneExp
 
 
 class SequentialMetaLearningExp(Experiment):
@@ -523,9 +655,8 @@ class SequentialMetaLearningExp(Experiment):
                    optimizer=self.optimizer,
                    iteration_step=self.step,
                    iteration_step_kwargs={'train': train,
-                                          'dataset': data_loader.dataset},
+                                          'loader': data_loader},
                    )
-
 
     def prepare_train_callbacks(self, log_text, train_loader, test_loaders=None):
         all_cb = super().prepare_train_callbacks(log_text, train_loader, test_loaders=test_loaders)
@@ -566,6 +697,7 @@ def with_dataset_name(class_obj, add_tags=True):
                                 type=str,
                                 default=None)
             return parser
+
         def finalize_init(self, PARAMS, list_tags):
             self.name_dataset_training = PARAMS['name_dataset_training']
             self.name_datasets_testing = PARAMS['name_dataset_testing']
@@ -635,7 +767,6 @@ def unity_builder_class(class_obj):
             all_cb = super().prepare_train_callbacks(log_text, train_loader, test_loaders=test_loaders)
             ck = CheckStoppingLevel()
             all_cb += [PlotUnityImagesEveryOnceInAWhile(dataset=train_loader.dataset,
-                                                        grayscale=self.grayscale,
                                                         plot_every=1000,
                                                         plot_only_n_times=20),
                        # TriggerActionWithPatience(min_delta=0.01, patience=400, percentage=True, mode='max',
@@ -643,30 +774,30 @@ def unity_builder_class(class_obj):
                        #                           metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
                        #                           check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
                        #                           triggered_action=ck.go_next_level)]
-            ]
+                       ]
             return all_cb
+
         def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
             all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
             all_cb += [PlotUnityImagesEveryOnceInAWhile(dataset=testing_loader.dataset,
-                                                        grayscale=self.grayscale,
                                                         plot_every=1000,
                                                         plot_only_n_times=5),
-                       ComputeDataFrame3DsequenceLearning(k=testing_loader.dataset.sampler.k,
-                                                          nSt=testing_loader.dataset.sampler.nSt,
-                                                          nSc=testing_loader.dataset.sampler.nSc,
-                                                          nFt=testing_loader.dataset.sampler.nFt,
-                                                          nFc=testing_loader.dataset.sampler.nFc,
-                                                          num_classes=self.k,
-                                                          use_cuda=self.use_cuda,
-                                                          network_name=self.network_name,
-                                                          size_canvas=self.size_canvas,
-                                                          log_text_plot=log_text,
-                                                          weblogger=self.weblogger,
-                                                          output_and_softmax=False)
+                       SequenceLearning3dDataFrameSaver(k=testing_loader.dataset.sampler.k,
+                                                        nSt=testing_loader.dataset.sampler.nSt,
+                                                        nSc=testing_loader.dataset.sampler.nSc,
+                                                        nFt=testing_loader.dataset.sampler.nFt,
+                                                        nFc=testing_loader.dataset.sampler.nFc,
+                                                        num_classes=self.k,
+                                                        use_cuda=self.use_cuda,
+                                                        network_name=self.network_name,
+                                                        size_canvas=self.size_canvas,
+                                                        log_text_plot=log_text,
+                                                        weblogger=self.weblogger,
+                                                        output_and_softmax=False)
                        ]
             return all_cb
+
     return UnityExp
 
 
 sequence_unity_meta_learning_exp = unity_builder_class(with_dataset_name(SequentialMetaLearningExp))
-

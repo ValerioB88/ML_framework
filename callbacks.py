@@ -1,6 +1,7 @@
 """
 Ports of Callback classes from the Keras library.
 """
+import seaborn as sn
 from sty import fg, bg, rs, ef
 from tqdm import tqdm
 import numpy as np
@@ -12,17 +13,15 @@ import copy
 import csv
 import io
 import neptune
-import wandb
 import framework_utils
 import pathlib
-import seaborn as sn
 import matplotlib.pyplot as plt
 import torch
 from time import time
 import framework_utils as utils
 import pandas as pd
 import signal, os
-from cossim import CosSimTranslation, CosSimResize, CosSimRotate
+from distance_activation import DistanceActivationTranslation, DistanceActivationScale, DistanceActivationRotate
 # from neptunecontrib.api import log_chart
 import time
 
@@ -340,8 +339,9 @@ class StopFromUserInput(Callback):
 #
 
 class TriggerActionWithPatience(Callback):
-    def __init__(self, mode='min', min_delta=0, patience=10, percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100, triggered_action=None, action_name='', alpha=1):
+    def __init__(self, mode='min', min_delta=0, patience=10, min_delta_is_percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100, triggered_action=None, action_name='', alpha=1, weblogger=False, verbose=False):
         super().__init__()
+        self.verbose=verbose
         self.triggered_action = triggered_action
         self.mode = mode  # mode refers to what are you trying to reach.
         self.check_every = check_every
@@ -350,12 +350,13 @@ class TriggerActionWithPatience(Callback):
         self.best = None
         self.num_bad_iters = 0
         self.is_better = None
-        self._init_is_better(mode, min_delta, percentage)
+        self._init_is_better(mode, min_delta, min_delta_is_percentage)
         self.reaching_goal = reaching_goal
         self.metric_name = metric_name
         self.action_name = action_name
         self.first_iter = True
         self.alpha = alpha
+        self.weblogger = weblogger
         self.exp_metric = None
         # reaching goal: if the metric stays higher/lower (max/min) than the goal for patience steps
         if reaching_goal is not None:
@@ -365,7 +366,7 @@ class TriggerActionWithPatience(Callback):
         if patience == 0:
             self.is_better = lambda a, b: True
             self.step = lambda a: False
-        self.string = f'Action {self.action_name} for metric [{self.metric_name}] <> {self.reaching_goal if self.reaching_goal is not None else self.mode}, checking every [{self.check_every} batch iters], patience: {self.patience} [corresponding to [{patience}] batch iters]]' + (f' with ExpMovAvg alpha: {self.alpha}') if self.alpha != 1 else ''
+        self.string = f'Action {self.action_name} for metric [{self.metric_name}] <> {self.reaching_goal if self.reaching_goal is not None else self.mode}, checking every [{self.check_every} batch iters], patience: {self.patience} [corresponding to [{patience}] batch iters]]' + ((f' with ExpMovAvg alpha: {self.alpha}') if self.alpha != 1 else '')
         print(f'Set up action: {self.string}')
 
     def on_batch_end(self, batch, logs=None):
@@ -379,6 +380,10 @@ class TriggerActionWithPatience(Callback):
 
         if logs['tot_iter'] % self.check_every == 0:
             metrics = self.exp_fun(logs[self.metric_name]).avg
+            print(f"Iter: {logs['tot_iter']}, Metric: {metrics}") if self.verbose else None
+
+            if self.weblogger == 2:
+                neptune.log_metric(f'{self.metric_name} - a: {self.alpha} - action: {self.action_name}', metrics)
             if self.best is None:
                 self.best = metrics
                 return
@@ -397,13 +402,16 @@ class TriggerActionWithPatience(Callback):
                     self.best = metrics
                 else:
                     self.num_bad_iters += 1
-            print(f"Patience: {self.num_bad_iters}/{self.patience}")
+            print(f"Num Bad Iter: {self.num_bad_iters}") if self.verbose else None
+            print(f"Patience: {self.num_bad_iters}/{self.patience}") if (self.verbose or self.patience - self.num_bad_iters < 20) else None
 
             if self.num_bad_iters >= self.patience:
                 print(f"Action triggered: {self.string}")
                 self.triggered_action(logs, self)
                 # needs to reset itself
                 self.num_bad_iters = 0
+        else:
+            print(f"Not updating now {self.check_every - (logs['tot_iter'] % self.check_every)}") if self.verbose else None
 
     def _init_is_better(self, mode, min_delta, percentage):
         if mode not in {'min', 'max'}:
@@ -546,62 +554,114 @@ class AverageChangeMetric(RunningMetrics):
 
             self.init_classic_logs()
 
-class EndEpochTest(Callback):
-    def __init__(self, testing_loader, every_x_epochs=1, weblogger=0, log_text='', use_cuda=None, call_run=None):
-        self.testing_loader = testing_loader
+class DuringTrainingTest(Callback):
+    test_time = 0
+    num_tests = 0
+
+    def __init__(self, testing_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, weblogger=0, multiple_sec_of_test_time=None, log_text='', use_cuda=None, call_run=None):
+        self.testing_loaders = testing_loaders
         self.use_cuda = use_cuda
         self.every_x_epochs = every_x_epochs
+        self.every_x_iter = every_x_iter
+        self.every_x_sec = every_x_sec
         self.weblogger = weblogger
         self.log_text = log_text
         self.call_run = call_run
+        self.time_from_last_test = None
+        self.multiple_sec_of_test_time = multiple_sec_of_test_time
+
+    def on_train_begin(self, logs=None):
+        self.time_from_last_test = time.time()
+
+    def run_tests(self):
+        start_test_time = time.time()
+        print(fg.green, end="")
+        print(f"################ TEST DURING TRAIN - NUM {self.num_tests} ################")
+        print(rs.fg, end="")
+
+        def test(testing_loader, log=''):
+            print(f"Testing " + fg.green + f"[{testing_loader.dataset.name_generator}]" + rs.fg)
+            mid_test_cb = [
+                StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
+                TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                    to_weblog=self.weblogger, log_text=self.log_text + log)]
+
+
+            with torch.no_grad():
+                _, logs = self.call_run(testing_loader,
+                                        train=False,
+                                        callbacks=mid_test_cb,
+                                        )
+
+        print("TEST IN EVAL MODE")
+        self.model.eval()
+        for testing_loader in self.testing_loaders:
+            test(testing_loader, log=f' [{testing_loader.dataset.name_generator}]')
+
+        self.model.train()
+        print("TEST IN TRAIN MODE")
+        for testing_loader in self.testing_loaders:
+            test(testing_loader, log=f' [{testing_loader.dataset.name_generator}]')
+
+        self.num_tests += 1
+
+        self.time_from_last_test = time.time()
+        self.test_time = time.time() - start_test_time
+        if self.multiple_sec_of_test_time:
+            print("Test time is {:.4f} , next test is gonna happen in {:.4f}".format(self.test_time, self.test_time*self.multiple_sec_of_test_time))
+        print(fg.green, end="")
+        print("#############################################")
+        print(rs.fg, end="")
 
     def on_epoch_begin(self, epoch, logs=None):
-        if epoch % self.every_x_epochs == 0:
-            print(fg.green, end="")
-            print("\n################ TEST ################")
-            print(rs.fg, end="")
+        if (self.every_x_epochs is not None and epoch % self.every_x_epochs == 0) or epoch==0:
+            print(f"\nTest every {self.every_x_epochs} epochs")
+            self.run_tests()
 
-            print(f"Begin of epoch {epoch}. Testing " + fg.green + f"[{self.testing_loader.dataset.name_generator}]" + rs.fg)
-            def test(log=''):
-                mid_test_cb = [
-                    StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
-                    TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                        to_weblog=self.weblogger, log_text=self.log_text + log)]
-                with torch.no_grad():
-                    _, logs = self.call_run(self.testing_loader,
-                                            train=False,
-                                            callbacks=mid_test_cb,
-                                            )
-            print("TEST IN EVAL MODE")
-            self.model.eval()
-            test()
+    def on_batch_end(self, batch, logs=None):
+        if (self.every_x_iter is not None and logs['tot_iter'] % self.every_x_iter) or \
+           (self.every_x_sec is not None and self.every_x_sec < time.time() - self.time_from_last_test) or \
+           (self.multiple_sec_of_test_time is not None and time.time() - self.time_from_last_test > self.multiple_sec_of_test_time * self.test_time):
+            if (self.every_x_iter is not None and logs['tot_iter'] % self.every_x_iter):
+                print(f"\nTest every {self.every_x_iter} iterations")
+            if (self.every_x_sec is not None and self.every_x_sec < time.time() - self.time_from_last_test):
+                print(f"\nTest every {self.every_x_sec} seconds ({time.time() -self.time_from_last_test} secs passed from last test)")
+            if (self.multiple_sec_of_test_time is not None and time.time() - self.time_from_last_test > self.multiple_sec_of_test_time * self.test_time):
+                print(f"\nTest every {self.multiple_sec_of_test_time * self.test_time} seconds ({time.time() - self.time_from_last_test} secs passed from last test)")
 
-            # print("TEST IN TRAIN MODE")
-            self.model.train()
-            # test(log=' TRAIN')
-            print(fg.green, end="")
-            print("#############################################")
-            print(rs.fg, end="")
+            self.run_tests()
+
+    def on_train_end(self, logs=None):
+        print("End training")
+        self.run_tests()
+
 
 class EndEpochStats(Callback):
+    timer_train = None
+    def on_train_begin(self, logs=None):
+        self.timer_train = time.time()
+
     def on_epoch_begin(self, epoch, logs=None):
         print(fg.red + '\nEpoch: {}'.format(epoch) + rs.fg)
-        self.start = time.time()
+        self.timer_epoch = time.time()
 
     def on_epoch_end(self, epoch, logs=None):
         print(fg.red, end="")
-        print("End epoch. Tot iter: [{}] - in [{:.4f}] seconds\n".format(logs['tot_iter'], time.time()-self.start))
+        print("End epoch. Tot iter: [{}] - in [{:.4f}] seconds - tot [{:.4f}] seconds\n".format(logs['tot_iter'], time.time() - self.timer_epoch, time.time() - self.timer_train))
         print(rs.fg, end="")
 
 class StandardMetrics(RunningMetrics):
     num_iter = 0
+    time = None
 
     def __init__(self, print_it=True, metrics_prefix='', weblogger=2, **kwargs):
         self.weblogger = weblogger
         self.print_it = print_it
         self.metrics_prefix = metrics_prefix
-        self.time = time.time()
         super().__init__(**kwargs)
+
+    def on_train_begin(self, logs=None):
+        self.time = time.time()
 
     def on_training_step_end(self, batch_index, batch_logs=None):
         self.num_iter += 1
@@ -647,6 +707,7 @@ class TotalAccuracyMetric(Metrics):
 
 class ComputeConfMatrix(Callback):
     def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text='', class_names=None):
+
         self.num_classes = num_classes
         self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
         self.log_text_plot = weblog_text
@@ -660,8 +721,11 @@ class ComputeConfMatrix(Callback):
         if self.reset_every is not None and logs['tot_iter'] % self.reset_every == 0:
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
             self.num_iter = 0
-        for t, p in zip(logs['y_true'].view(-1), logs['y_pred'].view(-1)):
-            self.confusion_matrix[t.long(), p.long()] += 1
+        try:
+            for t, p in zip(logs['y_true'].view(-1), logs['y_pred'].view(-1)):
+                self.confusion_matrix[t.long(), p.long()] += 1
+        except IndexError:
+            print(fg.red + "Index error during confusion matrix calculation. This shouldn't happen (unless you are on the local machine)!" + rs.fg)
         self.num_iter += 1
 
     def on_train_end(self, logs=None):
@@ -766,7 +830,9 @@ class PlotTimeElapsed(Callback):
             self.start_time = time.time()
 
 
-class ComputeDataFrame(Callback):
+
+
+class GenericDataFrameSaver(Callback):
     @staticmethod
     def build_columns(cat_to_save):
         array = [np.concatenate(np.array([np.array(['softmax', 'softmax']),
@@ -855,13 +921,14 @@ class ComputeDataFrame(Callback):
         data_frame = self._compute_and_log_metrics(data_frame)
         logs['dataframe'] = data_frame
 
+
+
 # for now this is only supported with the UnityImageSampelrGenerator
 class PlotUnityImagesEveryOnceInAWhile(Callback):
     counter = 0
 
-    def __init__(self, dataset, grayscale, plot_every=100, plot_only_n_times=5):
+    def __init__(self, dataset, plot_every=100, plot_only_n_times=5):
         self.dataset= dataset
-        self.grayscale = grayscale
         self.plot_every = plot_every
         self.plot_only_n_times = plot_only_n_times
 
@@ -869,13 +936,11 @@ class PlotUnityImagesEveryOnceInAWhile(Callback):
         if logs['tot_iter'] % self.plot_every == self.plot_every - 1 and self.counter < self.plot_only_n_times:
             framework_utils.plot_images_on_weblogger(self.dataset, self.dataset.name_generator, self.dataset.stats,
                                                      images=logs['images'], labels=None, more=None,
-                                                     log_text=f"ITER {logs['tot_iter']}",
-                                                     grayscale=self.grayscale)
+                                                     log_text=f"ITER {logs['tot_iter']}")
             self.counter += 1
 
-from generate_datasets.generators.unity_metalearning_generator import PlaceCamerasMode
 
-class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
+class SequenceLearning3dDataFrameSaver(GenericDataFrameSaver):
     def __init__(self, k, nSt, nSc, nFt, nFc, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.k = k
@@ -930,7 +995,7 @@ class ComputeDataFrame3DsequenceLearning(ComputeDataFrame):
 
         return add_logs
 
-class ComputeDataFrame3DmetaLearning(ComputeDataFrame):
+class MetaLearning3dDataFrameSaver(GenericDataFrameSaver):
     def _get_additional_logs(self, logs, sample_index):
         # each row is a camera query. It works even for Q>1
         self.camera_positions_batch = np.array(logs['more']['camera_positions'])
@@ -949,7 +1014,7 @@ class ComputeDataFrame3DmetaLearning(ComputeDataFrame):
         return data_frame
 
 
-class ComputeDataFrameTranslation(ComputeDataFrame):
+class TranslationDataFrameSaver(GenericDataFrameSaver):
     def __init__(self, translation_type_str, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.translation_type_str = translation_type_str
@@ -981,7 +1046,7 @@ class ComputeDataFrameTranslation(ComputeDataFrame):
         if self.weblogger:
             # Plot Density Translation
             mean_accuracy_translation = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
-            ax, fig, im = framework_utils.imshow_density(mean_accuracy_translation, plot_args={'interpolate': True, 'size_canvas': self.size_canvas}, vmin=1 / self.num_classes - 1 / self.num_classes * 0.2, vmax=1)
+            ax, im = framework_utils.imshow_density(mean_accuracy_translation, plot_args={'interpolate': True, 'size_canvas': self.size_canvas}, vmin=1 / self.num_classes - 1 / self.num_classes * 0.2, vmax=1)
             plt.title(self.log_text_plot)
             cbar = fig.colorbar(im)
             cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)

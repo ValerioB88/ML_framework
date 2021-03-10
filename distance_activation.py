@@ -9,9 +9,10 @@ from generate_datasets.generators.extension_generators import symmetric_steps
 from generate_datasets.generators.input_image_generator import InputImagesGenerator
 import matplotlib.pyplot as plt
 
-class CosSim(ABC):
-    def __init__(self, net, dataset: InputImagesGenerator = None, use_cuda=None):
+class DistanceActivation(ABC):
+    def __init__(self, net, dataset: InputImagesGenerator = None, distance='cossim', use_cuda=None):
         self.cuda = False
+        self.distance = distance
         if use_cuda is None:
             if torch.cuda.is_available():
                 self.cuda = True
@@ -24,13 +25,15 @@ class CosSim(ABC):
         self.only_save = ['Conv2d', 'Linear']
         self.detach_this_step = True
         self.activation = {}
+        self.last_linear_layer = ''
+        self.all_layers_name = []
         self.setup_network()
 
     @abstractmethod
     def get_base_and_other_canvasses(self, class_num, name_class):
         raise NotImplementedError
 
-    def finalize_each_class(self, name_class, cossim, x_values):
+    def finalize_each_class(self, name_class, cossim, cossim_imgs,  x_values):
         """
         Use for plotting, analysis, etc.
         """
@@ -56,6 +59,13 @@ class CosSim(ABC):
         recursive_group(self.net)
         return all_layers
 
+    def compute_distance(self, a, b):
+        if self.distance == 'cossim':
+            return torch.nn.CosineSimilarity(dim=0)(a.flatten(), b.flatten()).item()
+        if self.distance == 'euclidean':
+            diff =a.flatten() - b.flatten()
+            return torch.sqrt(torch.dot(diff, diff)).item()
+
     def get_cosine_similarity_from_images(self, base_canvas, other_canvasses):
         prediction_base = torch.argmax(self.net(make_cuda(base_canvas.unsqueeze(0), self.cuda))).item()
         base_activation = {}
@@ -66,7 +76,7 @@ class CosSim(ABC):
             base_activation[name] = features
 
         # cos_fun = torch.nn.CosineSimilarity(dim=1)
-        cossim_net = {}
+        distance_net = {}
         predictions = []
         for canvas_comparison in other_canvasses:
             canvas_comparison_activation = {}
@@ -75,12 +85,35 @@ class CosSim(ABC):
                 if not np.any([i in name for i in self.only_save]):
                     continue
                 canvas_comparison_activation[name] = features
-                if name not in cossim_net:
-                    cossim_net[name] = []
-                # canvas_comparison_activation = features
-                cossim_net[name].append(torch.nn.CosineSimilarity(dim=0)(base_activation[name].flatten(), canvas_comparison_activation[name].flatten()).item())
-        cossim_images = [torch.nn.CosineSimilarity(dim=0)(base_canvas.flatten(), c.flatten()).item() for c in other_canvasses]
-        return cossim_net, cossim_images, (prediction_base, predictions)
+                if name not in distance_net:
+                    distance_net[name] = []
+                distance_net[name].append(self.compute_distance(base_activation[name], canvas_comparison_activation[name]))
+
+        distance_image = [self.compute_distance(base_canvas, c) for c in other_canvasses]
+
+        return distance_net, distance_image, (prediction_base, predictions)
+
+    @staticmethod
+    def get_average_cossim_across_classes_and_values(cossim_net):
+        all_layers = list(cossim_net[0].keys())
+
+        # global cossim across all values for each layer
+        mean = [np.mean(np.array([v[l] for k, v in cossim_net.items()])) for l in all_layers]
+        std = [np.std(np.array([v[l] for k, v in cossim_net.items()])) for l in all_layers]
+        return mean, std, all_layers
+
+    @staticmethod
+    def get_average_cossim_across_classes(cossim_net):
+        if isinstance(cossim_net[0], dict):
+
+            all_layers = list(cossim_net[0].keys())
+            mean = [np.mean(np.array([v[l] for k, v in cossim_net.items()]), axis=0) for l in all_layers]
+            std = [np.std(np.array([v[l] for k, v in cossim_net.items()]), axis=0) for l in all_layers]
+            return mean, std, all_layers
+        else:
+            mean = np.mean(np.array([v for k, v in cossim_net.items()]), axis=0)
+            std = np.std(np.array([v for k, v in cossim_net.items()]), axis=0)
+            return mean, std, None
 
     def get_cosine_similarity_one_class_random_img(self, class_num, dataset):
         """
@@ -90,7 +123,7 @@ class CosSim(ABC):
         name_class = dataset.idx_to_class[class_num]
 
         base_canvas, other_canvasses, x_values = self.get_base_and_other_canvasses(class_num, name_class)
-        cossim_net, cossim_images = self.get_cosine_similarity_from_images(base_canvas, other_canvasses)
+        cossim_net, cossim_images,  p = self.get_cosine_similarity_from_images(base_canvas, other_canvasses)
         self.finalize_each_class(name_class, cossim_net, cossim_images, x_values)
         return cossim_net, cossim_images, x_values
 
@@ -100,7 +133,11 @@ class CosSim(ABC):
         all_layers = self.group_all_layers()
         self.hook_lists = []
         for idx, i in enumerate(all_layers):
-            self.hook_lists.append(i.register_forward_hook(self.get_activation('{}: {}'.format(idx, str.split(str(i), '(')[0]))))
+            name = '{}: {}'.format(idx, str.split(str(i), '(')[0])
+            self.hook_lists.append(i.register_forward_hook(self.get_activation(name)))
+            if np.any([i in name for i in self.only_save]):
+                self.all_layers_name.append(name)
+        self.last_linear_layer = self.all_layers_name[-1]
 
     def remove_hooks(self):
         for h in self.hook_lists:
@@ -108,10 +145,10 @@ class CosSim(ABC):
         if self.was_train:
             self.net.train()
 
-    def calculate_cossim_dataloader(self, dataset):
-        x_value = None
+    def calculate_distance_dataloader(self, dataset=None):
         # self.setup_network()
-
+        if dataset is None:
+            dataset = self.dataset
         cossim_net = {}
         cossim_img = {}
         for c in range(dataset.num_classes):
@@ -129,7 +166,7 @@ class CosSim(ABC):
     #     return canvas
 
 
-class CosSimTranslation(CosSim):
+class DistanceActivationTranslation(DistanceActivation):
     """
     We compute cosine similarity between the leftmost-centered object and the ones on the horizontal line
     """
@@ -153,7 +190,7 @@ class CosSimTranslation(CosSim):
         return base_canvas, other_canvasses, stepsX
 
 
-class CosSimResize(CosSim):
+class DistanceActivationScale(DistanceActivation):
     """
     We compute cosine similarity between the leftmost-centered object and the ones on the horizontal line
     """
@@ -174,7 +211,7 @@ class CosSimResize(CosSim):
         return base_canvas, other_canvasses, sizes
 
 
-class CosSimRotate(CosSim):
+class DistanceActivationRotate(DistanceActivation):
     """
     We compute cosine similarity between the leftmost-centered object and the ones on the horizontal line
     """

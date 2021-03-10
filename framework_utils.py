@@ -1,25 +1,19 @@
 from sty import fg, bg, rs, ef
 import argparse
 import os
-import cv2
 import neptune
 import numpy as np
 import pandas as pd
-import seaborn as sn
+import cv2
 import torch
 from PIL import Image
 from matplotlib import pyplot as plt
 from matplotlib.patches import Rectangle
-from scipy import interpolate
-import plotly.express as px
-import plotly.graph_objects as go
-from scipy.spatial.transform import Rotation
 from matplotlib.patches import FancyArrowPatch
 from mpl_toolkits.mplot3d import proj3d
 from collections import namedtuple
-import cloudpickle
 from generate_datasets.generators.input_image_generator import InputImagesGenerator
-import wandb
+
 desired_width = 420
 np.set_printoptions(linewidth=desired_width)
 pd.set_option("display.max.columns", None)
@@ -42,6 +36,8 @@ class ExpMovingAverage():
 
 
 def scatter_plot_on_sphere(points, correct, title):
+    import plotly.express as px
+    import plotly.graph_objects as go
     df = pd.DataFrame(points, columns=['X', 'Y', 'Z']).join(pd.DataFrame({'correct': correct}))
 
     theta = np.linspace(0, 2 * np.pi, 100)
@@ -236,6 +232,7 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
         size_object = dataset.size_object if dataset.size_object is not None else (0, 0)
 
         def draw_rect(canvas, range):
+            import cv2
             canvas = cv2.rectangle(canvas, (range[0], range[2]),
                                            (range[1] - 1, range[3] - 1), (0, 0, 255), 2)
             canvas = cv2.rectangle(canvas, (range[0] - size_object[0] // 2, range[2] - size_object[0] // 2),
@@ -266,7 +263,7 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
 
     for i in range(num_batches_to_log):
         images, labels, more = next(iterator)
-        plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, dataset.grayscale, weblogger)
+        plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger)
 
         # import matplotlib.pyplot as plt
         # plt.hist(labels)
@@ -276,9 +273,13 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
 
 
 
-def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, grayscale, weblogger=2):
-    from generate_datasets.generators.unity_metalearning_generator import UnityGenMetaLearning
-    if isinstance(dataset, UnityGenMetaLearning):
+def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger=2):
+    import importlib
+    ## mlagents can't be used for pytorch 1.8.1, so we check if the module is there here.
+    mlagents_exists = importlib.util.find_spec('mlagents_envs') is not None
+    if mlagents_exists:
+        from generate_datasets.generators.unity_metalearning_generator import UnityGenMetaLearning
+    if mlagents_exists and isinstance(dataset, UnityGenMetaLearning):
         k, nSt, nFt, nSc, nFc, sc = dataset.sampler.k, dataset.sampler.nSt, dataset.sampler.nFt, dataset.sampler.nSc, dataset.sampler.nFc, dataset.size_canvas
         tot_frames_each_iter = (nSt * nFt) + (nSc * nFc)
         all_c = images[:k * nSc * nFc].reshape(k, nSc * nFc, images.shape[1], *sc).numpy()
@@ -401,6 +402,8 @@ def convert_normalized_tensor_to_plottable_figure(tensor, mean, std, title_lab=N
 LAYOUT = []
 
 def save_figure_layout(filename=None):
+    import cloudpickle
+
     global LAYOUT
     figt = namedtuple('figure', 'num size position')
     fignums = plt.get_fignums()
@@ -416,6 +419,8 @@ def save_figure_layout(filename=None):
 
 
 def load_figure_layout(filename=None, offset=0):
+    import cloudpickle
+
     global LAYOUT
     if filename is not None:
         LAYOUT = cloudpickle.load(open(filename, "rb"))
@@ -461,8 +466,10 @@ def conver_tensor_to_plot(tensor, mean, std):
 
 def imshow_batch(inp, stats=None, labels=None, title_more='', maximize=True, ax=None):
     if stats is None:
-        mean = np.array([0.5, 0.5, 0.5])
-        std = np.array([0.5, 0.5, 0.5])
+        # mean = np.array([0.5, 0.5, 0.5])
+        # std = np.array([0.5, 0.5, 0.5])
+        mean = np.array([0, 0, 0])
+        std = np.array([1, 1, 1])
     else:
         mean = stats['mean']
         std = stats['std']
@@ -475,7 +482,10 @@ def imshow_batch(inp, stats=None, labels=None, title_more='', maximize=True, ax=
         ax = np.array(ax)
     ax = ax.flatten()
     mng = plt.get_current_fig_manager()
-    mng.window.showMaximized() if maximize else None
+    try:
+        mng.window.showMaximized() if maximize else None
+    except AttributeError:
+        print("Tkinter can't maximize. Skipped")
     for idx, image in enumerate(inp):
         image = conver_tensor_to_plot(image, mean, std)
         ax[idx].clear()
@@ -496,6 +506,8 @@ def imshow_batch(inp, stats=None, labels=None, title_more='', maximize=True, ax=
 
 
 def interpolate_grid(canvas):
+    from scipy import interpolate
+
     x = np.arange(0, canvas.shape[1])
     y = np.arange(0, canvas.shape[0])
     # mask invalid values
@@ -525,10 +537,15 @@ def compute_density(values, plot_args=None):
 
     canvas = np.empty(size_canvas)
     canvas[:] = np.nan
-    x_values = np.array(values.index.get_level_values('transl_X'), dtype=int)
-    y_values = np.array(values.index.get_level_values('transl_Y'), dtype=int)
-    canvas[y_values, x_values] = values
-    # negative values are black, nan are white
+    if isinstance(values, pd.DataFrame):
+        x_values = np.array(values.index.get_level_values('transl_X'), dtype=int)
+        y_values = np.array(values.index.get_level_values('transl_Y'), dtype=int)
+        canvas[y_values, x_values] = values
+    else:
+        # here we assume that values are relative (e.g. 0.3 of the full canvas)
+        canvas[np.array(values[0]).astype(int),
+               np.array(values[1]).astype(int)] = values[2]
+        # negative values are black, nan are white
     # ax.imshow(canvas, vmin=lim[0], vmax=lim[1], cmap='viridis')
     # plt.colorbar(ax=ax)
     try:
@@ -540,13 +557,12 @@ def compute_density(values, plot_args=None):
 
 
 def imshow_density(values, ax=None, plot_args=None, **kwargs):
-    fig = None
     cmap = 'viridis' if 'cmap' not in kwargs else kwargs['cmap']
     if ax is None:
         fig, ax = plt.subplots(1, 1)
     canvas = compute_density(values, plot_args)
-    cm = plt.get_cmap(cmap)
-    canvas = cm(canvas)
+    # cm = plt.get_cmap(cmap)
+    # canvas = cm(canvas)
     im = ax.imshow(canvas, **kwargs)
 
     # TODO: This hasattr has to be done because the dataset structure changed. If you re-run all the experiments then you can delete the first part, hasattr(.., 'minX')
@@ -560,6 +576,6 @@ def imshow_density(values, ax=None, plot_args=None, **kwargs):
 
 
     plt.show()
-    return ax, fig, im
+    return ax, im
 ##
 
