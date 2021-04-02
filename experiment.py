@@ -19,7 +19,6 @@ from models.sequence_learner import *
 from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
 import time
-import wandb
 import random
 from torch.optim.lr_scheduler import MultiStepLR
 
@@ -69,6 +68,7 @@ class Experiment(ABC):
         self.max_iterations_testing = inf_if_minus_one(PARAMS['num_iterations_testing'])
         self.patience_stagnation = inf_if_minus_one(PARAMS['patience_stagnation'])
 
+        self.verbose = PARAMS['verbose']
         self.pretraining = PARAMS['pretraining']
         self.model_output_filename = PARAMS['model_output_filename']
         self.output_filename = PARAMS['output_filename']
@@ -77,10 +77,7 @@ class Experiment(ABC):
         self.force_cuda = PARAMS['force_cuda']
         self.additional_tags = PARAMS['additional_tags']
         self.weblogger = PARAMS['use_weblog']
-        self.group_name = PARAMS['wandb_group_name']
         self.project_name = PARAMS['project_name']
-        self.experiment_name = PARAMS['experiment_name']
-        self.grayscale = bool(PARAMS['grayscale'])
         self.use_device_num = PARAMS['use_device_num']
         if self.use_cuda:
             torch.cuda.set_device(self.use_device_num)
@@ -108,7 +105,7 @@ class Experiment(ABC):
         list_tags.append('ptImageNet') if self.pretraining == 'ImageNet' else None
         # list_tags.append(self.network_name)
         list_tags.append('lr{}'.format("{:2f}".format(self.learning_rate).split(".")[1])) if self.learning_rate is not None else None
-        list_tags.append('gray') if self.grayscale else None
+        # list_tags.append('gray') if self.grayscale else None
         if self.max_iterations is None:
             self.max_iterations = 5000 if self.use_cuda else 10
 
@@ -117,15 +114,11 @@ class Experiment(ABC):
     def set_loss_fn(self, loss_fn):
         self.loss_fn = loss_fn
 
-    def set_optimizer(selfs, optimizer):
+    def set_optimizer(self, optimizer):
         self.optimizer = optimizer
 
     def parse_arguments(self, parser):
         parser.add_argument('-seed', "--seed", type=int, default=None)
-        parser.add_argument("-expname", "--experiment_name",
-                            help="Name of the experiment session, used as a name in the weblogger",
-                            type=str,
-                            default=None)
         parser.add_argument("-r", "--num_runs",
                             help="run experiment n times",
                             type=int,
@@ -134,16 +127,15 @@ class Experiment(ABC):
                             help="Force to run it with cuda enabled or disabled (1/0). Set None to check if the GPU is available",
                             type=int,
                             default=None)
+        parser.add_argument("-verbose", "--verbose",
+                            type=lambda x: bool(int(x)),
+                            default=True)
         parser.add_argument("-use_device_num", "--use_device_num",
                             help="Use selected device (int)",
                             type=int,
                             default=0)
-        parser.add_argument("-grayscale", "--grayscale",
-                            help="Set the grayscale flag to true",
-                            type=int,
-                            default=0)
         parser.add_argument("-weblog", "--use_weblog",
-                            help="Log stuff to the weblogger [0=none, 1=wandb, 2=neptune])",
+                            help="Log stuff to the weblogger [0=none, 1=wandb [not supported], 2=neptune])",
                             type=int,
                             default=2)
         parser.add_argument("-tags", "--additional_tags",
@@ -153,10 +145,6 @@ class Experiment(ABC):
         parser.add_argument("-prjnm", "--project_name",
                             type=str,
                             default='TestProject')
-        parser.add_argument("-wbg", "--wandb_group_name",
-                            help="Group name for weight and biases, to organize sub experiments of a bigger project",
-                            type=str,
-                            default=None)
         parser.add_argument("-pat1", "--patience_stagnation",
                             help="Patience for early stopping for stagnation (num iter). Set to -1 to disable.",
                             type=int,
@@ -214,14 +202,10 @@ class Experiment(ABC):
 
         for i in sorted(PARAMS.keys()):
             print(f'\t{i} : ' + ef.inverse + f'{PARAMS[i]}' + rs.inverse)
-        if self.weblogger == 1:
-            a = time.time()
-            wandb.init(name=self.experiment_name, project=self.project_name, tags=list_tags, group=self.group_name, config=PARAMS)
-            print('Weblogger Creation: WANDB {}'.format(time.time() - a))
+
         if self.weblogger == 2:
-            PARAMS.update({'group_name': self.group_name})
             neptune.init(f'valeriobiscione/{self.project_name}')
-            neptune.create_experiment(name=self.experiment_name,
+            neptune.create_experiment(name=None,
                                       params=PARAMS,
                                       tags=list_tags)
         print(rs.fg)
@@ -474,9 +458,10 @@ class SupervisedLearningExperiment(Experiment):
 
 
 class SaveModelBackbone(Callback):
-    def __init__(self, net, output_path, log_in_weblogger=False):
+    def __init__(self, net, backbone, output_path, log_in_weblogger=False):
         self.output_path = output_path
         self.net = net
+        self.backbone = backbone
         super().__init__()
 
     def on_train_end(self, logs=None):
@@ -484,7 +469,7 @@ class SaveModelBackbone(Callback):
             pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
             print('Saving model in {}'.format(self.output_path))
             torch.save({'full': self.net.state_dict(),
-                        'backbone': self.net.backbone.state_dict(),
+                        'backbone': self.backbone.state_dict(),
                         'relation_module': self.net.relation_module.state_dict() if 'relation_module' in self.net._modules else None,
                         'classifier': self.net.classifier.state_dict() if 'classifier' in self.net._modules else None
                         }, self.output_path)
@@ -517,6 +502,9 @@ def create_backbone_exp(obj_class):
 
             return parser
 
+        def backbone(self) -> nn.Module:
+            return NotImplementedError
+
         def finalize_init(self, PARAMS, list_tags):
             self.freeze_backbone = PARAMS['freeze_backbone']
             self.backbone_name = PARAMS['backbone_name']
@@ -532,7 +520,7 @@ def create_backbone_exp(obj_class):
             all_cb = super().prepare_train_callbacks(log_text, train_loader, test_loaders=test_loaders)
             # This ComputeConfMatrix is used for matching, that's why num_class = 2
             all_cb = [i for i in all_cb if not isinstance(i, SaveModel)]  # eliminate old SaveModel
-            all_cb += ([SaveModelBackbone(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
+            all_cb += ([SaveModelBackbone(self.net, self.backbone(), self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
             if self.max_epochs != np.inf:
                 all_cb += ([CallLrScheduler(scheduler=MultiStepLR(self.optimizer, [int(self.max_epochs/2), int(self.max_epochs * 0.75)], gamma=0.1), step_epoch=True, step_batch=False)])
             return all_cb
@@ -542,26 +530,27 @@ def create_backbone_exp(obj_class):
 
             if self.freeze_backbone:
                 print(fg.red + "Freezing Backbone" + rs.fg)
-                for param in self.net.backbone.parameters():
+                for param in self.backbone().parameters():
                     param.requires_grad = False
 
-            framework_utils.print_net_info(self.net, self.weblogger)
+            framework_utils.print_net_info(self.net) if self.verbose else None
             self.net.cuda() if self.use_cuda else None
             return self.net, self.net.parameters()
 
         def pretraining_backbone_or_full(self):
             if self.pretraining_backbone != 'vanilla':
                 if os.path.isfile(self.pretraining_backbone):
-                    self.net.backbone.load_state_dict(torch.load(self.pretraining_backbone, map_location='cuda' if self.use_cuda else 'cpu')['backbone'])
+                    self.backbone().load_state_dict(torch.load(self.pretraining_backbone, map_location='cuda' if self.use_cuda else 'cpu')['backbone'])
                     print(fg.red + f"Loaded backbone model from {self.pretraining_backbone}" + rs.fg)
                 else:
                     assert False, f"Pretraining Backbone not found {self.pretraining_backbone}"
 
             if self.pretraining != 'vanilla':
                 if os.path.isfile(self.pretraining):
+                    print(fg.red + f"Loading.. full model from {self.pretraining}..." + rs.fg, end="")
                     ww = torch.load(self.pretraining, map_location='cuda' if self.use_cuda else 'cpu')['full']
                     self.net.load_state_dict(ww)
-                    print(fg.red + f"Loaded full model from {self.pretraining}" + rs.fg)
+                    print(fg.red + " Done." + rs.fg)
                 else:
                     assert False, f"Pretraining path not found {self.pretraining}"
 

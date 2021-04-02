@@ -172,7 +172,7 @@ def remap_value(x, range_source, range_target):
     return range_target[0] + (x - range_source[0]) * (range_target[1] - range_target[0]) / (range_source[1] - range_source[0])
 
 
-def print_net_info(net, weblog):
+def print_net_info(net):
     """
     Get net must be reimplemented for any non abstract base class. It returns the network and the parameters to be updated during training
     """
@@ -309,7 +309,8 @@ def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more,
                         for im, lb, n in zip(images, labels, add_text)]}, step=0)
     if weblogger == 2:
         [neptune.log_image(metric_str,
-                           convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'], text=f'{lb}' + os.path.splitext(n)[0])) for im, lb, n in zip(plot_images, labels, add_text)]
+                           (convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'], text=f'{lb}' + os.path.splitext(n)[0])/255))
+         for im, lb, n in zip(plot_images, labels, add_text)]
 
 class TwoWaysDict(dict):
     def __setitem__(self, key, value):

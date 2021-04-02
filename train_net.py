@@ -191,11 +191,11 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
 
     tot_iter = 0
     epoch = 0
+    logs['tot_iter'] = 0
 
     while True:
         callbacks.on_epoch_begin(epoch)
         logs['epoch'] = epoch
-        logs['tot_iter'] = 0
 
         for batch_index, data in enumerate(data_loader, 0):
 

@@ -20,7 +20,7 @@ def get_net(self, new_num_classes=None):
                                                  scramble_fc=self.scramble_fc,
                                                  scramble_conv=self.scramble_conv)
     return net, params_to_update
-
+import torchvision
 @staticmethod
 def get_network_structure(network, pretrain_ImageNet=False):
     if network == 'vgg11_bn':
