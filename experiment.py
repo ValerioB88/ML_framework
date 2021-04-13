@@ -257,7 +257,7 @@ class Experiment(ABC):
             all_cb += ([TriggerActionWithPatience(mode='min',
                                                   min_delta=1,
                                                   patience=self.patience_stagnation,
-                                                  min_delta_is_percentage=True, reaching_goal=None,
+                                                  min_delta_is_percentage=False, reaching_goal=None,
                                                   metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
                                                   check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
                                                   triggered_action=stop, action_name='Early Stopping', alpha=0.1,
@@ -484,6 +484,7 @@ def create_backbone_exp(obj_class):
 
         def parse_arguments(self, parser):
             super().parse_arguments(parser)
+
             parser.add_argument("-bkbn", "--backbone_name",
                                 help="The network structure used as a backbone [conv4-64], [conv5-128], [conv6-128], [conv6-256]",
                                 type=str,
@@ -498,6 +499,7 @@ def create_backbone_exp(obj_class):
                                 help="",
                                 type=lambda x: bool(int(x)),
                                 default=False)
+
 
 
             return parser
