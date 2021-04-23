@@ -380,7 +380,7 @@ class TriggerActionWithPatience(Callback):
 
         if logs['tot_iter'] % self.check_every == 0:
             metrics = self.exp_fun(logs[self.metric_name]).avg
-            print(f"Iter: {logs['tot_iter']}, Metric: {metrics}") if self.verbose else None
+            print(f"Iter: {logs['tot_iter']}, Metric: {logs[self.metric_name]}, Exp Metric: {metrics}") if self.verbose else None
 
             if self.weblogger == 2:
                 neptune.log_metric(f'{self.metric_name} - a: {self.alpha} - action: {self.action_name}', metrics)

@@ -255,7 +255,7 @@ class Experiment(ABC):
             all_cb += ([StopWhenMetricIs(value_to_reach=self.max_iterations - 1, metric_name='tot_iter')])  # you could use early stopping for that
         if self.patience_stagnation != np.inf:
             all_cb += ([TriggerActionWithPatience(mode='min',
-                                                  min_delta=1,
+                                                  min_delta=0.01,
                                                   patience=self.patience_stagnation,
                                                   min_delta_is_percentage=False, reaching_goal=None,
                                                   metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
