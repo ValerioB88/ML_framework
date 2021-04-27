@@ -10,7 +10,7 @@ from generate_datasets.generators.input_image_generator import InputImagesGenera
 import matplotlib.pyplot as plt
 
 class DistanceActivation(ABC):
-    def __init__(self, net, dataset: InputImagesGenerator = None, distance='cossim', use_cuda=None):
+    def __init__(self, net, dataset: InputImagesGenerator = None, distance='cossim', use_cuda=None, compare_with_same_obj=True):
         self.cuda = False
         self.distance = distance
         if use_cuda is None:
@@ -27,6 +27,7 @@ class DistanceActivation(ABC):
         self.activation = {}
         self.last_linear_layer = ''
         self.all_layers_name = []
+        self.compare_with_same_obj = compare_with_same_obj
         self.setup_network()
 
     @abstractmethod

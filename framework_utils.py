@@ -1,7 +1,8 @@
+from neptune.new.types import File
 from sty import fg, bg, rs, ef
 import argparse
 import os
-import neptune
+import neptune.new as neptune
 import numpy as np
 import pandas as pd
 import cv2
@@ -12,8 +13,12 @@ from matplotlib.patches import Rectangle
 from matplotlib.patches import FancyArrowPatch
 from mpl_toolkits.mplot3d import proj3d
 from collections import namedtuple
-from generate_datasets.generators.input_image_generator import InputImagesGenerator
+import matplotlib as mpl
 
+new_rc_params = {'text.usetex': False,
+"svg.fonttype": 'none'
+}
+mpl.rcParams.update(new_rc_params)
 desired_width = 420
 np.set_printoptions(linewidth=desired_width)
 pd.set_option("display.max.columns", None)
@@ -185,11 +190,6 @@ def print_net_info(net):
             tmp += "\t" + name + "\n"
             print("\t" + name)
             num_trainable_params += len(param.flatten())
-
-    # if weblog == 2:
-    #     neptune.log_text("Network Info", f"Params to learn: {tmp}")
-    #     neptune.log_text("Trainable Params: {num_trainable_params}\n*Network*\n{net}")
-
     print(f"Trainable Params: {num_trainable_params}")
 
     print('***Network***')
@@ -225,8 +225,8 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
     if weblogger == 1:
         wandb.run.summary['Log: {} mean'.format(dataset_name)] = stats['mean']
         wandb.run.summary['Log: {} std'.format(dataset_name)] = stats['std']
-    if weblogger == 2:
-        neptune.log_text('Logs', f'{dataset_name} mean: {stats["mean"]}, std: {stats["std"]}')
+    if isinstance(weblogger, neptune.run.Run):
+        weblogger['Logs'] = f'{dataset_name} mean: {stats["mean"]}, std: {stats["std"]}'
     if isinstance(dataset, TranslateGenerator):
 
         size_object = dataset.size_object if dataset.size_object is not None else (0, 0)
@@ -253,18 +253,17 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
                 metric_str = f'Debug/{log_text} AREA [{dataset_name}] '
                 if weblogger == 1:
                     wandb.log({metric_str: [wandb.Image(canvas)]}, step=0)
-                if weblogger == 2:
-                    neptune.log_image(metric_str, canvas.astype(np.uint8))
+                if isinstance(weblogger, neptune.run.Run):
+                    weblogger[metric_str].log(File(canvas.astype(np.uint8)))
                 if break_after_one:
                     break
 
-    iterator = iter(dataloader)
     nc = dataset.name_classes
-
-    for i in range(num_batches_to_log):
-        images, labels, more = next(iterator)
+    for idx, data in enumerate(dataloader):
+        images, labels, more = data
         plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger)
-
+        if idx + 1 >= num_batches_to_log:
+            break
         # import matplotlib.pyplot as plt
         # plt.hist(labels)
         # import framework_utils
@@ -307,9 +306,9 @@ def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more,
                                                                                  text=f'{lb}' +
                                                                                       os.path.splitext(n)[0]).astype(np.uint8))
                         for im, lb, n in zip(images, labels, add_text)]}, step=0)
-    if weblogger == 2:
-        [neptune.log_image(metric_str,
-                           (convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'], text=f'{lb}' + os.path.splitext(n)[0])/255))
+    if isinstance(weblogger, neptune.run.Run):
+        [weblogger[metric_str].log
+                           (File.as_image(convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'], text=f'{lb}' + os.path.splitext(n)[0])/255))
          for im, lb, n in zip(plot_images, labels, add_text)]
 
 class TwoWaysDict(dict):
@@ -549,6 +548,7 @@ def compute_density(values, plot_args=None):
         # negative values are black, nan are white
     # ax.imshow(canvas, vmin=lim[0], vmax=lim[1], cmap='viridis')
     # plt.colorbar(ax=ax)
+
     try:
         if do_interpolate:
             canvas = interpolate_grid(canvas)
@@ -565,7 +565,6 @@ def imshow_density(values, ax=None, plot_args=None, **kwargs):
     # cm = plt.get_cmap(cmap)
     # canvas = cm(canvas)
     im = ax.imshow(canvas, **kwargs)
-
     # TODO: This hasattr has to be done because the dataset structure changed. If you re-run all the experiments then you can delete the first part, hasattr(.., 'minX')
     if 'dataset' in list(plot_args.keys()):
         dataset = plot_args['dataset']

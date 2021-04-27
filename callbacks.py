@@ -5,6 +5,7 @@ import seaborn as sn
 from sty import fg, bg, rs, ef
 from tqdm import tqdm
 import numpy as np
+from neptune.new.types import File
 import torch
 from collections import OrderedDict, Iterable
 import warnings
@@ -12,7 +13,7 @@ import os
 import copy
 import csv
 import io
-import neptune
+import neptune.new as neptune
 import framework_utils
 import pathlib
 import matplotlib.pyplot as plt
@@ -382,8 +383,8 @@ class TriggerActionWithPatience(Callback):
             metrics = self.exp_fun(logs[self.metric_name]).avg
             print(f"Iter: {logs['tot_iter']}, Metric: {logs[self.metric_name]}, Exp Metric: {metrics}") if self.verbose else None
 
-            if self.weblogger == 2:
-                neptune.log_metric(f'{self.metric_name} - a: {self.alpha} - action: {self.action_name}', metrics)
+            if isinstance(self.weblogger, neptune.run.Run):
+                self.weblogger[f'{self.metric_name} - a: {self.alpha} - action: {self.action_name}'].log(metrics)
             if self.best is None:
                 self.best = metrics
                 return
@@ -489,20 +490,6 @@ class SaveModel(Callback):
             # neptune.log_artifact(self.output_path, self.output_path) if self.log_in_neptune else None
 
 
-class SaveModel(Callback):
-    def __init__(self, net, output_path, log_in_weblogger=False):
-        self.output_path = output_path
-        self.net = net
-        super().__init__()
-
-    def on_train_end(self, logs=None):
-        if self.output_path is not None:
-            pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
-            print('Saving model in {}'.format(self.output_path))
-            torch.save(self.net.state_dict(), self.output_path)
-
-
-
 class Metrics(Callback):
     def __init__(self, use_cuda, log_every, log_text=''):
         self.use_cuda = use_cuda
@@ -584,7 +571,7 @@ class DuringTrainingTest(Callback):
             mid_test_cb = [
                 StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
                 TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                    to_weblog=self.weblogger, log_text=self.log_text + log)]
+                                    weblogger=self.weblogger, log_text=self.log_text + log)]
 
 
             with torch.no_grad():
@@ -654,7 +641,7 @@ class StandardMetrics(RunningMetrics):
     num_iter = 0
     time = None
 
-    def __init__(self, print_it=True, metrics_prefix='', weblogger=2, **kwargs):
+    def __init__(self, print_it=True, metrics_prefix='', weblogger=False, **kwargs):
         self.weblogger = weblogger
         self.print_it = print_it
         self.metrics_prefix = metrics_prefix
@@ -679,16 +666,16 @@ class StandardMetrics(RunningMetrics):
             if self.weblogger == 1:
                 wandb.log({metric1: batch_logs[f'{self.metrics_prefix}/mean_loss'],
                            metric2: batch_logs[f'{self.metrics_prefix}/mean_acc']})
-            if self.weblogger == 2:
-                neptune.send_metric(metric1, batch_logs[f'{self.metrics_prefix}/mean_loss'])
-                neptune.send_metric(metric2, batch_logs[f'{self.metrics_prefix}/mean_acc'])
+            if isinstance(self.weblogger, neptune.run.Run):
+                self.weblogger[metric1].log(batch_logs[f'{self.metrics_prefix}/mean_loss'])
+                self.weblogger[metric2].log(batch_logs[f'{self.metrics_prefix}/mean_acc'])
             self.init_classic_logs()
 
 
 class TotalAccuracyMetric(Metrics):
-    def __init__(self, use_cuda, to_weblog=True, log_text=''):
+    def __init__(self, use_cuda, weblogger=True, log_text=''):
         super().__init__(use_cuda, log_every=None, log_text=log_text)
-        self.to_weblogger = to_weblog
+        self.weblogger = weblogger
         self.start = time.time()
 
     def on_training_step_end(self, batch_index, batch_logs=None):
@@ -700,10 +687,10 @@ class TotalAccuracyMetric(Metrics):
         print((fg.cyan + 'Total Accuracy for [{}] samples, [{}] iter, ' + ef.inverse + ef.bold + '[{}]' + rs.inverse + ': ' + ef.inverse  + '{:.4f}%'  + rs.inverse + rs.bold_dim + fg.cyan + ' - in {:.4f} seconds\n' + rs.fg).format(self.total_samples, logs["tot_iter"], self.log_text, logs["total_accuracy"], time.time() - self.start))
 
         metric_str = 'Metric/{} Acc'.format(self.log_text)
-        if self.to_weblogger == 1:
+        if self.weblogger == 1:
             wandb.log({metric_str: logs['total_accuracy']})
-        if self.to_weblogger == 2:
-            neptune.log_metric(metric_str, logs['total_accuracy'])
+        if isinstance(self.weblogger, neptune.run.Run):
+            self.weblogger[metric_str].log(logs['total_accuracy'])
 
 class ComputeConfMatrix(Callback):
     def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text='', class_names=None):
@@ -741,54 +728,11 @@ class ComputeConfMatrix(Callback):
             metric_str = 'Confusion Matrix'  # {}'.format(self.log_text_plot)
             if self.weblogger == 1:
                 wandb.log({metric_str: wandb.Image(plt)})
-            if self.weblogger == 2:
-                neptune.log_image(metric_str, figure)
+            if isinstance(self.weblogger, neptune.run.Run):
+                self.weblogger[metric_str].log(figure)
                 # log_chart(name=metric_str, chart=figure)
 
             plt.close()
-#
-# class ComputeCorrectAndFrequencyMatchingMatrix(Callback):
-#     def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text=''):
-#         self.num_classes = num_classes
-#         self.correct_matrix = torch.zeros(self.num_classes, self.num_classes)
-#         self.frequency_matrix = torch.zeros(self.num_classes, self.num_classes)
-#
-#         self.log_text_plot = weblog_text
-#         self.reset_every = reset_every
-#         self.num_iter = 0
-#         self.weblogger = weblogger
-#         super().__init__()
-#
-#     def on_training_step_end(self, batch, logs=None):
-#         if self.reset_every is not None and batch % self.reset_every == 0:
-#             self.correct_matrix = torch.zeros(self.num_classes, self.num_classes)
-#             self.frequency_matrix = torch.zeros(self.num_classes, self.num_classes)
-#
-#             self.num_iter = 0
-#         correct = logs['y_true'] == logs['y_pred']
-#         for idx, l in enumerate(logs['more']['labels']):  # logs['y_true'].view(-1), logs['y_pred'].view(-1)):
-#             self.frequency_matrix[l[0].long(), l[1].long()] += 1
-#             if correct[idx]:
-#                 self.correct_matrix[l[0].long(), l[1].long()] += 1
-#         self.num_iter += 1
-#
-#     def on_train_end(self, logs=None):
-#         logs['conf_acc_freq'] = (self.correct_matrix / self.correct_matrix.sum(1)[:, None]).numpy()
-#
-#         if self.weblogger:
-#             figure = plt.figure(figsize=(20, 15))
-#             sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".2f", annot_kws={"size": 15}, vmin=0, vmax=1)  # font size
-#             plt.ylabel('truth')
-#             plt.xlabel('predicted')
-#             plt.title(self.log_text_plot + ' last {} iters'.format(self.num_iter), size=22)
-#             metric_str = 'Confusion Matrix'  # {}'.format(self.log_text_plot)
-#             if self.weblogger == 1:
-#                 wandb.log({metric_str: wandb.Image(plt)})
-#             if self.weblogger == 2:
-#                 neptune.log_image(metric_str, figure)
-#                 # log_chart(name=metric_str, chart=figure)
-#
-#             plt.close()
 
 
 class RollingAccEachClassWeblog(Callback):
@@ -811,8 +755,8 @@ class RollingAccEachClassWeblog(Callback):
                     metric_str = f'Metric/Class Acc Training {idx} - [{self.neptune_text}]'
                     if self.weblogger == 1:
                         wandb.log({metric_str: cc * 100 if not np.isnan(cc) else -1})  # step=logs['tot_iter'])
-                    if self.weblogger == 2:
-                        neptune.send_metric(metric_str, cc * 100 if not np.isnan(cc) else -1)
+                    if isinstance(self.weblogger, neptune.run.Run):
+                        self.weblogger[metric_str].log(cc * 100 if not np.isnan(cc) else -1)
 
 
 class PlotTimeElapsed(Callback):
@@ -1008,8 +952,8 @@ class MetaLearning3dDataFrameSaver(GenericDataFrameSaver):
         metric_str = '3D Sphere'
         if self.weblogger == 1:
             pass
-        if self.weblogger == 2:
-            neptune.log_image(metric_str, mplt_fig)
+        if isinstance(self.weblogger, neptune.run.Run):
+            self.weblogger[metric_str].log(mplt_fig)
             # log_chart(f'{self.log_text_plot} {metric_str}', plotly_fig)
         return data_frame
 
@@ -1048,13 +992,14 @@ class TranslationDataFrameSaver(GenericDataFrameSaver):
             mean_accuracy_translation = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
             ax, im = framework_utils.imshow_density(mean_accuracy_translation, plot_args={'interpolate': True, 'size_canvas': self.size_canvas}, vmin=1 / self.num_classes - 1 / self.num_classes * 0.2, vmax=1)
             plt.title(self.log_text_plot)
+            fig = ax.figure
             cbar = fig.colorbar(im)
             cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)
             metric_str = 'Density Plot/{}'.format(self.log_text_plot)
             if self.weblogger == 1:
                 wandb.log({metric_str: fig})
-            if self.weblogger == 2:
-                neptune.log_image(metric_str, fig)
+            if isinstance(self.weblogger, neptune.run.Run):
+                self.weblogger[metric_str].log(fig)
 
             plt.close()
 
@@ -1070,8 +1015,8 @@ class TranslationDataFrameSaver(GenericDataFrameSaver):
             metric_str = 'Size Accuracy/{}'.format(self.log_text_plot)
             if self.weblogger == 1:
                 wandb.log({metric_str: plt})
-            if self.weblogger == 2:
-                neptune.log_image(metric_str, fig)
+            if isinstance(self.weblogger, neptune.run.Run):
+                self.weblogger[metric_str].log(fig)
             plt.close()
 
             # Plot Rotation Accuracy
@@ -1087,8 +1032,8 @@ class TranslationDataFrameSaver(GenericDataFrameSaver):
             metric_str = 'Rotation Accuracy/{}'.format(self.log_text_plot)
             if self.weblogger == 1:
                 wandb.log({metric_str: plt})
-            if self.weblogger == 2:
-                neptune.log_image(metric_str, fig)
+            if isinstance(self.weblogger, neptune.run.Run):
+                self.weblogger[metric_str].log(fig)
             plt.close()
             plt.close()
         return data_frame
@@ -1135,8 +1080,8 @@ class PlotGradientWeblog(Callback):
             metric_str = 'Hidden Panels/Gradient Plot [{}]'.format(self.log_txt)
             if self.weblogger == 1:
                 wandb.log({metric_str: wandb.Image(plt)})
-            if self.weblogger == 2:
-                neptune.log_image(metric_str, figure)
+            if isinstance(self.weblogger, neptune.run.Run):
+                self.weblogger[metric_str].log(figure)
 
             self.grad = []
             plt.close()

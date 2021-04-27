@@ -204,10 +204,11 @@ class Experiment(ABC):
             print(f'\t{i} : ' + ef.inverse + f'{PARAMS[i]}' + rs.inverse)
 
         if self.weblogger == 2:
-            neptune.init(f'valeriobiscione/{self.project_name}')
-            neptune.create_experiment(name=None,
-                                      params=PARAMS,
-                                      tags=list_tags)
+            neptune_run = neptune.init(f'valeriobiscione/{self.project_name}')
+            neptune_run["sys/tags"].add(list_tags)
+            neptune_run["parameters"] = PARAMS
+            neptune_run["STATUS"] = "Running"
+            self.weblogger = neptune_run
         print(rs.fg)
         self.new_run()
 
@@ -230,13 +231,13 @@ class Experiment(ABC):
             EndEpochStats(),
             StandardMetrics(log_every=self.console_check_every, print_it=True,
                             use_cuda=self.use_cuda,
-                            weblogger=0, log_text=log_text,
+                            weblogger=self.weblogger, log_text=log_text,
                             metrics_prefix='cnsl'),
 
             StopFromUserInput(),
             # PlotTimeElapsed(time_every=100),
             TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                to_weblog=None, log_text=log_text)]
+                                weblogger=None, log_text=log_text)]
 
         if self.stop_when_train_acc_is != np.inf:
             all_cb += (
@@ -247,7 +248,7 @@ class Experiment(ABC):
                                            check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
                                            triggered_action=stop,
                                            action_name='Early Stopping', alpha=0.1,
-                                           weblogger=2)])  # once reached a certain accuracy
+                                           weblogger=self.weblogger)])  # once reached a certain accuracy
         if self.max_epochs != np.inf:
             all_cb += ([StopWhenMetricIs(value_to_reach=self.max_epochs - 1, metric_name='epoch', check_after_batch=False)])  # you could use early stopping for that
 
@@ -261,7 +262,7 @@ class Experiment(ABC):
                                                   metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
                                                   check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
                                                   triggered_action=stop, action_name='Early Stopping', alpha=0.1,
-                                                  weblogger=2)])  # for stagnation
+                                                  weblogger=self.weblogger)])  # for stagnation
         # Extra Stopping Rule. When loss is 0, just stop.
         all_cb += ([TriggerActionWithPatience(mode='min',
                                               min_delta=0,
@@ -270,7 +271,7 @@ class Experiment(ABC):
                                               metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
                                               check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
                                               triggered_action=stop, action_name='Stop with Loss=0',
-                                              weblogger=2)])
+                                              weblogger=self.weblogger)])
 
         # all_cb += ([SaveModel(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
         if test_loaders is not None:
@@ -320,7 +321,7 @@ class Experiment(ABC):
             StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),  # you could use early stopping for that
 
             TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                to_weblog=self.weblogger, log_text=log_text)]
+                                weblogger=self.weblogger, log_text=log_text)]
 
         if self.max_iterations_testing != np.inf:
             all_cb += ([StopWhenMetricIs(value_to_reach=self.max_iterations_testing, metric_name='tot_iter')])
@@ -391,6 +392,7 @@ class SupervisedLearningExperiment(Experiment):
     def __init__(self, **kwargs):
         self.size_canvas = None
         self.batch_size = None
+        self.step = standard_net_step
         super().__init__(**kwargs)
 
     def parse_arguments(self, parser):
@@ -413,7 +415,7 @@ class SupervisedLearningExperiment(Experiment):
                    callbacks=callbacks,
                    loss_fn=self.loss_fn,  # torch.nn.CrossEntropyLoss(),
                    optimizer=self.optimizer,  # torch.optim.SGD(params_to_update, lr=0.1, momentum=0.9),
-                   iteration_step=standard_net_step,
+                   iteration_step=self.step,
                    iteration_step_kwargs={'train': train, 'loader': loader},
                    )
 
@@ -530,10 +532,15 @@ def create_backbone_exp(obj_class):
         def finish_get_net(self):
             self.net = self.pretraining_backbone_or_full()
 
-            if self.freeze_backbone:
+            if self.freeze_backbone == 1:
                 print(fg.red + "Freezing Backbone" + rs.fg)
                 for param in self.backbone().parameters():
                     param.requires_grad = False
+            elif self.freeze_backbone == 2:  # freeze intermediate conv layers
+                for param in self.backbone().parameters():
+                    param.requires_grad = False
+                for param in self.backbone().features[:4].parameters():
+                    param.requires_grad = True
 
             framework_utils.print_net_info(self.net) if self.verbose else None
             self.net.cuda() if self.use_cuda else None
@@ -749,7 +756,7 @@ def unity_builder_class(class_obj):
                 def go_next_level(self, logs, *args, **kwargs):
                     if self.there_is_another_level:
                         self.there_is_another_level = train_loader.dataset.sampler.env_params.next_level()
-                        framework_utils.weblog_dataset_info(train_loader, f'Increase {train_loader.dataset.sampler.env_params.count_increase}', weblogger=2)  # the idea is that after reaching the end level, we wait another stagnMation
+                        framework_utils.weblog_dataset_info(train_loader, f'Increase {train_loader.dataset.sampler.env_params.count_increase}', weblogger=self.weblogger)  # the idea is that after reaching the end level, we wait another stagnMation
                     else:
                         print("No new level, reached maximum")
                         logs['stop'] = True
