@@ -8,9 +8,16 @@ from abc import ABC, abstractmethod
 from generate_datasets.generators.extension_generators import symmetric_steps
 from generate_datasets.generators.input_image_generator import InputImagesGenerator
 import matplotlib.pyplot as plt
+from enum import Enum
+
+class CompareWith(Enum):
+    ANY_OBJECT = 0
+    SAME_OBJECT = 1
+    SAME_CLASS_DIFF_OBJ = 2
+
 
 class DistanceActivation(ABC):
-    def __init__(self, net, dataset: InputImagesGenerator = None, distance='cossim', use_cuda=None, compare_with_same_obj=True):
+    def __init__(self, net, dataset: InputImagesGenerator = None, distance='cossim', use_cuda=None, compare_with=CompareWith.SAME_OBJECT):
         self.cuda = False
         self.distance = distance
         if use_cuda is None:
@@ -27,7 +34,7 @@ class DistanceActivation(ABC):
         self.activation = {}
         self.last_linear_layer = ''
         self.all_layers_name = []
-        self.compare_with_same_obj = compare_with_same_obj
+        self.compare_with = compare_with
         self.setup_network()
 
     @abstractmethod

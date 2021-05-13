@@ -471,7 +471,7 @@ class SaveModelBackbone(Callback):
             pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
             print('Saving model in {}'.format(self.output_path))
             torch.save({'full': self.net.state_dict(),
-                        'backbone': self.backbone.state_dict(),
+                        'backbone': self.backbone.state_dict() if self.backbone is not None else None,
                         'relation_module': self.net.relation_module.state_dict() if 'relation_module' in self.net._modules else None,
                         'classifier': self.net.classifier.state_dict() if 'classifier' in self.net._modules else None
                         }, self.output_path)

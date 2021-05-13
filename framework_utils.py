@@ -131,22 +131,23 @@ def from_dataframe_to_3D_scatter(dataframe, title):
 
 
 def create_sphere(color='r', r=1):
-    fig = plt.figure(figsize=(5, 5))
+    fig = plt.figure(figsize=(10, 10))
     ax = fig.gca(projection='3d')
     # draw sphere
-    u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
+    u, v = np.mgrid[0:2*np.pi:10j, 0:np.pi:10j]
     x = np.cos(u)*np.sin(v)
     y = np.sin(u)*np.sin(v)
     z = np.cos(v)
-    ax.plot_wireframe(x*r, y*r, z*r, color=color, alpha=0.2)
+    ax.plot_wireframe(x*r, y*r, z*r, color=color, alpha=0.1)
 
     # draw a point
-    ax.scatter([0], [0], [0], color="g", s=100)
+    ax.scatter([0], [0], [0], color="b", s=100)
 
     vv = np.array([1, 0, 0])
-    add_norm_vector(vv * r, 'b', ax=ax, norm=False)
+    # add_norm_vector(vv * r, 'b', ax=ax, norm=False)
 
     plt.tight_layout()
+    # plt.gca().set_aspect('equal', adjustable='box')
     return fig, ax
 
 

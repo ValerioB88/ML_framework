@@ -4,6 +4,9 @@ of the Keras `model.fit()` API.
 """
 import torch
 from typing import Callable, List, Union
+
+import torchvision.models
+
 from callbacks import ProgressBarLogger, CallbackList, Callback
 from framework_utils import make_cuda
 import framework_utils
@@ -12,6 +15,7 @@ from models.sequence_learner import SequenceMatchingNetSimple
 import framework_utils
 # from torchviz import make_dot
 import matplotlib.pyplot as plt
+import torchvision
 EPSILON = 1e-8
 
 
@@ -61,6 +65,8 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, loader, train):
     output_batch = model(images)
 
     # framework_utils.imshow_batch(images, stats=loader.dataset.stats)
+    if model.training and isinstance(model, torchvision.models.GoogLeNet):
+        output_batch = output_batch.logits
     loss = loss_fn(output_batch,
                    labels)
     logs['output'] = output_batch
