@@ -78,11 +78,18 @@ class DistanceActivation(ABC):
         prediction_base = torch.argmax(self.net(make_cuda(base_canvas.unsqueeze(0), self.cuda))).item()
         base_activation = {}
         # base_activation = activation['one_to_last']
+        # i= 0
+        all_used_layers = [] # this may be useful in case of splitting networks
         for name, features in self.activation.items():
             if not np.any([i in name for i in self.only_save]):
                 continue
             base_activation[name] = features
-
+            # all_used_layers.append(name)
+            # if not self.all_layers_name[i] == name:
+            #     stop=1
+            # print(self.all_layers_name[i] == name)
+            # i+=1
+        # print(i)
         # cos_fun = torch.nn.CosineSimilarity(dim=1)
         distance_net = {}
         predictions = []
@@ -157,6 +164,8 @@ class DistanceActivation(ABC):
         # self.setup_network()
         if dataset is None:
             dataset = self.dataset
+        else:
+            self.dataset = dataset
         cossim_net = {}
         cossim_img = {}
         for c in range(dataset.num_classes):
