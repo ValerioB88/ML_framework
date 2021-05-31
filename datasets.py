@@ -2,13 +2,16 @@ import os
 import pathlib
 import pickle
 from pathlib import Path
+from time import time
 
+import cloudpickle
 import numpy as np
+import torch
 import torchvision
+from PIL import ImageStat
 from sty import fg, rs
+from torchvision import transforms as tf
 from torchvision.datasets import ImageFolder
-
-from dataset_utils.compute_mean_std_dataset import compute_mean_and_std_from_dataset
 
 
 class MyImageFolder(ImageFolder):
@@ -153,3 +156,51 @@ class SubsetImageFolder(MyImageFolder):
                 print(fg.yellow + f"SAVING SAMPLES IN /samples/{Path(save_load_samples_filename).name}" + rs.fg)
                 pathlib.Path(Path(save_load_samples_filename).parent).mkdir(parents=True, exist_ok=True)
                 pickle.dump(self.samples, open(save_load_samples_filename, 'wb'))
+
+
+class Stats(ImageStat.Stat):
+    def __add__(self, other):
+        return Stats(list(map(np.add, self.h, other.h)))
+
+
+def compute_mean_and_std_from_dataset(dataset, dataset_path=None, max_iteration=100, data_loader=None, verbose=True):
+    if max_iteration < 30:
+        print(f'Max Iteration in Compute Mean and Std for dataset is lower than 30! This could create unrepresentative stats!') if verbose else None
+    start = time()
+    stats = {}
+    transform_save = dataset.transform
+    if data_loader is None:
+        data_loader = torch.utils.data.DataLoader(dataset, batch_size=16, shuffle=True, num_workers=0)
+
+    statistics = None
+    c = 0
+    stop = False
+    for data, _, _ in data_loader:
+        for b in range(data.shape[0]):
+            if c % 10 == 9:
+                print(f'{c}/{max_iteration}, m: {np.array(statistics.mean)/255}, std: {np.array(statistics.stddev)/255}')
+            c += 1
+            if statistics is None:
+                statistics = Stats(tf.ToPILImage()(data[b]))
+            else:
+                statistics += Stats(tf.ToPILImage()(data[b]))
+            if c > max_iteration:
+                stop = True
+                break
+        if stop:
+            break
+    print()
+    print(np.array(statistics.mean)/255)
+    print(np.array(statistics.stddev) / 255)
+    stats['time_one_iter'] = (time() - start)/max_iteration
+    stats['mean'] = np.array(statistics.mean)/255
+    stats['std'] = np.array(statistics.stddev) / 255
+    stats['iter'] = max_iteration
+    print((fg.cyan + 'mean: {}; std: {}, time: {}' + rs.fg).format(stats['mean'], stats['std'], stats['time_one_iter'])) if verbose else None
+    if dataset_path is not None:
+        print('Saving in {}'.format(dataset_path))
+        with open(dataset_path, 'wb') as f:
+            cloudpickle.dump(stats, f)
+
+    dataset.transform = transform_save
+    return stats
