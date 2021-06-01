@@ -258,7 +258,6 @@ class Experiment(ABC):
                                               triggered_action=stop, action_name='Stop with Loss=0',
                                               weblogger=self.weblogger)])
 
-        # all_cb += ([SaveModel(self.net, self.model_output_filename, self.weblogger)] if self.model_output_filename is not None else [])
         if test_loaders is not None:
             all_cb += ([DuringTrainingTest(testing_loaders=test_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, multiple_sec_of_test_time=4, weblogger=self.weblogger, log_text='test during train', use_cuda=self.use_cuda, call_run=self.call_run)])
 

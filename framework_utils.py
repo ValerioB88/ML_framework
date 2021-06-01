@@ -80,10 +80,6 @@ def scatter_plot_on_sphere(points, correct, title):
     return plotlyfig
 
 
-# def align_vectors(u, v):
-#     rot = Rotation.align_vectors([[1, 0, 0]], [u])
-#     aligned_vec = rot[0].apply(v)
-#     return aligned_vec
 
 def align_vectors(a, b):
     def get_incl_and_azi(a):
@@ -207,9 +203,8 @@ def weblogging_plot_generators_info(train_loader=None, test_loaders_list=None, w
             for loader in test_loaders_list:
                 weblog_dataset_info(loader, log_text=loader.dataset.name_generator, weblogger=weblogger, num_batches_to_log=num_batches_to_log)
 
-def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1, num_batches_to_log=2):
-    from generate_datasets.generators.translate_generator import TranslateGenerator
 
+def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1, num_batches_to_log=2):
     stats = {}
     compute_my_generator_info = False
     if 'stats' in dir(dataloader.dataset):
@@ -223,41 +218,8 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
         stats['std'] = [0.2, 0.2, 0.2]
         Warning('MEAN, STD AND DATASET_NAME NOT SET FOR NEPTUNE LOGGING. This message is not referring to normalizing in PyTorch')
 
-    if weblogger == 1:
-        wandb.run.summary['Log: {} mean'.format(dataset_name)] = stats['mean']
-        wandb.run.summary['Log: {} std'.format(dataset_name)] = stats['std']
     if isinstance(weblogger, neptune.run.Run):
         weblogger['Logs'] = f'{dataset_name} mean: {stats["mean"]}, std: {stats["std"]}'
-    if isinstance(dataset, TranslateGenerator):
-
-        size_object = dataset.size_object if dataset.size_object is not None else (0, 0)
-
-        def draw_rect(canvas, range):
-            import cv2
-            canvas = cv2.rectangle(canvas, (range[0], range[2]),
-                                           (range[1] - 1, range[3] - 1), (0, 0, 255), 2)
-            canvas = cv2.rectangle(canvas, (range[0] - size_object[0] // 2, range[2] - size_object[0] // 2),
-                                           (range[1] + size_object[1] // 2 - 1, range[3] + size_object[1] // 2 - 1), (0, 0, 240), 2)
-            return canvas
-
-        break_after_one = False
-        if compute_my_generator_info:
-            if all(value == list(dataset.translations_range.values())[0] for value in dataset.translations_range.values()):
-                break_after_one = True
-            for groupID, rangeC in dataset.translations_range.items():
-                canvas = np.zeros(dataset.size_canvas) + 254
-                if isinstance(rangeC[0], tuple):
-                    for r in rangeC:
-                        canvas = draw_rect(canvas, r)
-                else:
-                    canvas = draw_rect(canvas, rangeC)
-                metric_str = f'Debug/{log_text} AREA [{dataset_name}] '
-                if weblogger == 1:
-                    wandb.log({metric_str: [wandb.Image(canvas)]}, step=0)
-                if isinstance(weblogger, neptune.run.Run):
-                    weblogger[metric_str].log(File(canvas.astype(np.uint8)))
-                if break_after_one:
-                    break
 
     nc = dataset.name_classes
     for idx, data in enumerate(dataloader):
@@ -265,52 +227,21 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
         plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger)
         if idx + 1 >= num_batches_to_log:
             break
-        # import matplotlib.pyplot as plt
-        # plt.hist(labels)
-        # import framework_utils
-        # framework_utils.imshow_batch(images[:32], labels=[f'C{c}_O{o}' for c, o in zip(labels[:32].numpy(), more[:32].numpy())], stats=dataset.stats)
-        # framework_utils.imshow_batch(images[32:], labels=[f'C{c}_O{o}' for c, o in zip(labels[32:].numpy(), more[32:].numpy())], stats=dataset.stats)
-
 
 
 def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger=2):
-    import importlib
-    ## mlagents can't be used for pytorch 1.8.1, so we check if the module is there here.
-    mlagents_exists = importlib.util.find_spec('mlagents_envs') is not None
-    if mlagents_exists:
-        from generate_datasets.generators.unity_metalearning_generator import UnityGenMetaLearning
-    if mlagents_exists and isinstance(dataset, UnityGenMetaLearning):
-        k, nSt, nFt, nSc, nFc, sc = dataset.sampler.k, dataset.sampler.nSt, dataset.sampler.nFt, dataset.sampler.nSc, dataset.sampler.nFc, dataset.size_canvas
-        tot_frames_each_iter = (nSt * nFt) + (nSc * nFc)
-        all_c = images[:k * nSc * nFc].reshape(k, nSc * nFc, images.shape[1], *sc).numpy()
-        all_t = images[k * nSc * nFc:].reshape(k, nSt * nFt, images.shape[1], *sc).numpy()
-        if all_c.size != 0:
-            plot_images = torch.tensor(np.array([np.vstack((i, j)) for i, j in zip(all_c, all_t)]).reshape(k * tot_frames_each_iter, all_t.shape[2] , 128, 128))
-        else:
-            plot_images = torch.tensor(np.array([i for i in all_t]).reshape(k * tot_frames_each_iter, all_t.shape[2], 128, 128))
-        # labels = ["" for i in range(len(images))]
-        labels = ["" for i in range(k * (tot_frames_each_iter))]
-        labels[:-1:(nSt * nFt) + (nSc * nFc)] = [str(i) for i in dataset.sampler.labels]
-
-    else:
-        plot_images = images[0:np.max((4, len(images)))]
-        labels = labels[0:np.max((4, len(labels)))]
-        # more = more[0:np.max((4, len(more)))]
+    plot_images = images[0:np.max((4, len(images)))]
+    labels = labels[0:np.max((4, len(labels)))]
     add_text = [''] * len(labels)
     if isinstance(more, dict) and 'image_name' in list(more.keys()):
         add_text = more['image_name']
     metric_str = 'Debug/{} example images: [{}]'.format(log_text, dataset_name)
 
-    if weblogger == 1:
-        wandb.log({metric_str:
-                       [wandb.Image(convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'],
-                                                                                 text=f'{lb}' +
-                                                                                      os.path.splitext(n)[0]).astype(np.uint8))
-                        for im, lb, n in zip(images, labels, add_text)]}, step=0)
     if isinstance(weblogger, neptune.run.Run):
         [weblogger[metric_str].log
                            (File.as_image(convert_normalized_tensor_to_plottable_array(im, stats['mean'], stats['std'], text=f'{lb}' + os.path.splitext(n)[0])/255))
          for im, lb, n in zip(plot_images, labels, add_text)]
+
 
 class TwoWaysDict(dict):
     def __setitem__(self, key, value):
@@ -330,9 +261,9 @@ class TwoWaysDict(dict):
         """Returns the number of connections"""
         return dict.__len__(self) // 2
 
+
 def convert_pil_img_to_tensor(imageT, normalize):
     """
-
     @param imageT: a PIL image (HxWxC)
     @param normalize: Normalize is a transform operation in pytorch
     @return: a Tensor
@@ -382,6 +313,7 @@ def copy_img_in_canvas(image: Image, size_canvas: tuple, position, color_canvas=
     canvas = canvas.convert('RGB')
     return canvas
 
+
 def convert_normalized_tensor_to_plottable_figure(tensor, mean, std, title_lab=None, title_more=''):
     tensor = tensor.numpy().transpose((1, 2, 0))
     image = std * tensor + mean
@@ -400,8 +332,8 @@ def convert_normalized_tensor_to_plottable_figure(tensor, mean, std, title_lab=N
     plt.close(fig)
     return fig
 
-LAYOUT = []
 
+LAYOUT = []
 def save_figure_layout(filename=None):
     import cloudpickle
 
@@ -433,8 +365,6 @@ def load_figure_layout(filename=None, offset=0):
         plt.get_current_fig_manager().window.show()
 
 
-
-
 def convert_normalized_tensor_to_plottable_array(tensor, mean, std, text):
     image = conver_tensor_to_plot(tensor, mean, std)
     canvas_size = np.shape(image)
@@ -444,14 +374,8 @@ def convert_normalized_tensor_to_plottable_array(tensor, mean, std, text):
     umat = cv2.putText(cv2.UMat(umat), text=text, org=(0, int(canvas_size[1] - 3)), fontFace=font, fontScale=font_scale, color=[0, 0, 0], lineType=cv2.LINE_AA, thickness=6)
     umat = cv2.putText(img=cv2.UMat(umat), text=text, org=(0, int(canvas_size[1] - 3)),
                 fontFace=font, fontScale=font_scale, color=[255, 255, 255], lineType=cv2.LINE_AA, thickness=1)
-    # cv2.imshow('ciao', image)
     image = cv2.UMat.get(umat)
-    # if len(image.shape) == 2 or (len(image.shape) == 3 and image.shape[2] == 1):
-    #     image = image / 255
-    # else:
     image = np.array(image, np.uint8)
-
-    # plt.imshow(image, cmap='gray', vmin=0, vmax=1)
     return image
 
 
@@ -467,8 +391,6 @@ def conver_tensor_to_plot(tensor, mean, std):
 
 def imshow_batch(inp, stats=None, labels=None, title_more='', maximize=True, ax=None):
     if stats is None:
-        # mean = np.array([0.5, 0.5, 0.5])
-        # std = np.array([0.5, 0.5, 0.5])
         mean = np.array([0, 0, 0])
         std = np.array([1, 1, 1])
     else:
@@ -566,7 +488,6 @@ def imshow_density(values, ax=None, plot_args=None, **kwargs):
     # cm = plt.get_cmap(cmap)
     # canvas = cm(canvas)
     im = ax.imshow(canvas, **kwargs)
-    # TODO: This hasattr has to be done because the dataset structure changed. If you re-run all the experiments then you can delete the first part, hasattr(.., 'minX')
     if 'dataset' in list(plot_args.keys()):
         dataset = plot_args['dataset']
         if hasattr(dataset, 'minX'):
@@ -574,8 +495,6 @@ def imshow_density(values, ax=None, plot_args=None, **kwargs):
         elif hasattr(dataset, 'translations_range'):
             for groupID, rangeC in dataset.translations_range.items():
                 ax.add_patch(Rectangle((rangeC[0], rangeC[2]), rangeC[1] - rangeC[0], rangeC[3] - rangeC[2], edgecolor='r', facecolor='none', linewidth=2))
-
-
     plt.show()
     return ax, im
 ##
