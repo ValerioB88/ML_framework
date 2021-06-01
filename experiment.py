@@ -1,4 +1,3 @@
-from sty import fg, bg, ef, rs
 import cloudpickle
 import argparse
 from abc import ABC, abstractmethod
@@ -204,7 +203,7 @@ class Experiment(ABC):
 
     @abstractmethod
     def get_net(self, num_classes):
-        NotImplementedError
+        return NotImplementedError
 
     def prepare_train_callbacks(self, log_text, train_loader, test_loaders=None):
         def stop(logs, cb):
@@ -294,7 +293,6 @@ class Experiment(ABC):
                                   )
         return net
 
-
     def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
         all_cb = [
             StandardMetrics(log_every=3000, print_it=True,
@@ -317,8 +315,6 @@ class Experiment(ABC):
         self.net = net
         if self.use_cuda:
             self.net.cuda()
-        self.net.eval() # TODO: WATCH OUT!!!
-        # print(fg.red + "WATCH OUT! EVAL MODE IS ON!! THIS SHOULD BE OFF!!!" + rs.fg)
         if log_text is None:
             log_text = [f'{d.dataset.name_generator}' for d in test_loaders_list]
         print(fg.yellow + f"\n**Testing Started** [{log_text}]" + rs.fg)
@@ -427,7 +423,7 @@ class SupervisedLearningExperiment(Experiment):
 
     @abstractmethod
     def get_net(self, num_classes=None):
-        NotImplementedError
+        return NotImplementedError
 
     def prepare_train_callbacks(self, log_text, train_loader, test_loaders=None):
         num_classes = self._get_num_classes(train_loader)
@@ -487,12 +483,9 @@ def create_backbone_exp(obj_class):
                                 help="",
                                 type=lambda x: bool(int(x)),
                                 default=False)
-
-
-
             return parser
 
-
+        @abstractmethod
         def backbone(self) -> nn.Module:
             return NotImplementedError
 
@@ -555,234 +548,3 @@ def create_backbone_exp(obj_class):
     return BackboneExp
 
 
-class SequentialMetaLearningExp(Experiment):
-    """
-    Select network_name = 'matching_net_basics' for using the basic network that works for any image size, used in the paper for Omniglot.
-                        'matching_net_more' to use a more complex version of the matching net, with more conv layer. It can still accept any type of input
-                        'matching_net_plus' the decision is made by an evaluation network. It accepts 128x128px images.
-                        #ToDo: with a adaptive average pool make it accept whatever size
-    """
-
-    def __init__(self, **kwargs):
-        self.training_folder = None
-        self.testing_folder = None
-        self.nSc = None
-        self.nSt = None
-        self.nFc = None
-        self.nFt = None
-        self.k = None
-        self.step = None
-        super().__init__(**kwargs)
-
-    def parse_arguments(self, parser):
-        super().parse_arguments(parser)
-        parser.add_argument("-nSc", "--nSc",
-                            help="Num sequences for each candidate.",
-                            type=int,
-                            default=2)
-        parser.add_argument("-nSt", "--nSt",
-                            help="Num sequences for each training object.",
-                            type=int,
-                            default=2)
-        parser.add_argument("-nFc", "--nFc",
-                            help="Num frames for each sequence in the candidate.",
-                            type=int,
-                            default=2)
-        parser.add_argument("-nFt", "--nFt",
-                            help="Num frames for each sequence for each training object.",
-                            type=int,
-                            default=2)
-        parser.add_argument("-k", "--k",
-                            help="Num of camera sets",
-                            type=int,
-                            default=2)
-        return parser
-
-    def finalize_init(self, PARAMS, list_tags):
-        self.nSt = PARAMS['nSt']
-        self.nSc = PARAMS['nSc']
-        self.nFt = PARAMS['nFt']
-        self.nFc = PARAMS['nFc']
-        self.k = PARAMS['k']
-        list_tags.append(f'{self.k}x{self.nSt}x{self.nSc}x{self.nFt}x{self.nFc}')
-        list_tags.append(self.network_name)
-        super().finalize_init(PARAMS, list_tags)
-
-    # def get_net(self, new_num_classes=None):
-    #     # ToDo: Matching Learning pretrain
-    #     device = torch.device('cuda' if self.use_cuda else 'cpu')
-    #     if self.network_name == 'seqNt1c':
-    #         assert self.nSc == 1 and self.nFc == 1, f"With the model {network_name} you need to set nSc and nFc to 1"
-    #         net = SequenceNtrain1cand(grayscale=self.grayscale)
-    #         self.step = sequence_net_Ntrain_1cand
-    #         self.loss_fn = MSELoss()  # CrossEntropyLoss()
-    #     elif self.network_name == 'relation_net':
-    #         assert self.nSc <= 1 and self.nFc <= 1 and self.nSt <= 1 and self.nFt <= 1
-    #         net = RelationNetSung(backbone_name='conv4', size_canvas=self.size_canvas, grayscale=self.grayscale)
-    #         self.step = sequence_net_Ntrain_1cand
-    #         self.loss_fn = MSELoss()
-    #     else:
-    #         assert False, f"network name {self.network_name} not recognized"
-    #     if self.pretraining != 'vanilla':
-    #         if os.path.isfile(self.pretraining):
-    #             print(f"Pretraining value should be a path when used with FewShotLearning (not ImageNet, etc.). Instead is {self.pretraining}")
-    #         net.load_state_dict(torch.load(self.pretraining, map_location=torch.device('cuda' if self.use_cuda else 'cpu')))
-    #
-    #     self.optimizer = Adam(net.parameters(), lr=0.001 if self.learning_rate is None else self.learning_rate),
-    #     framework_utils.print_net_info(self.net)
-    #
-    #     return net
-
-    def call_run(self, data_loader, callbacks=None, train=True):
-        return run(data_loader, use_cuda=self.use_cuda, net=self.net,
-                   callbacks=callbacks,
-                   loss_fn=self.loss_fn,
-                   optimizer=self.optimizer,
-                   iteration_step=self.step,
-                   iteration_step_kwargs={'train': train,
-                                          'loader': data_loader},
-                   )
-
-    def prepare_train_callbacks(self, log_text, train_loader, test_loaders=None):
-        all_cb = super().prepare_train_callbacks(log_text, train_loader, test_loaders=test_loaders)
-        # This ComputeConfMatrix is used for matching, that's why num_class = 2
-        all_cb += [ComputeConfMatrix(num_classes=2,
-                                     weblogger=self.weblogger,
-                                     weblog_text=log_text,
-                                     class_names=train_loader.dataset.classes)]
-        return all_cb
-
-    def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
-        all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
-        if save_dataframe:
-            all_cb += [ComputeConfMatrix(num_classes=2,
-                                         weblogger=self.weblogger,
-                                         weblog_text=log_text,
-                                         class_names=testing_loader.dataset.classes),
-                       ]
-        return all_cb
-
-
-def with_dataset_name(class_obj, add_tags=True):
-    class BuildDatasetExp(class_obj):
-        def __init__(self, **kwargs):
-            self.name_dataset_training = None
-            self.name_datasets_testing = None
-            self.add_tags = add_tags
-            super().__init__(**kwargs)
-
-        def parse_arguments(self, parser):
-            super().parse_arguments(parser)
-            parser.add_argument("-name_dataset_training", "--name_dataset_training",
-                                help="Select the name of the dataset used for training.",
-                                type=str,
-                                default=None)
-            parser.add_argument("-name_dataset_testing", "--name_dataset_testing",
-                                help="Select the name of the dataset used for testing.",
-                                type=str,
-                                default=None)
-            return parser
-
-        def finalize_init(self, PARAMS, list_tags):
-            self.name_dataset_training = PARAMS['name_dataset_training']
-            self.name_datasets_testing = PARAMS['name_dataset_testing']
-            if self.name_datasets_testing is None and self.name_dataset_training is None:
-                self.play_mode = True
-                self.name_dataset_training = None
-            if self.output_filename is None and self.name_datasets_testing is not None:
-                assert False, "You provided some dataset for testing, but no output. This is almost always a mistake"
-            if self.add_tags:
-                list_tags.append(f"tr{self.name_dataset_training.split('data')[-1]}") if self.name_dataset_training is not None else None
-                [list_tags.append(f"te{i.split('data')[-1]}") for i in self.name_datasets_testing.split('_')] if self.name_datasets_testing is not None else None
-
-            if self.name_datasets_testing is not None:
-                self.name_datasets_testing = str.split(self.name_datasets_testing, "_")
-            else:
-                self.name_datasets_testing = []
-
-            super().finalize_init(PARAMS, list_tags)
-
-    return BuildDatasetExp
-
-
-def unity_builder_class(class_obj):
-    class UnityExp(class_obj):
-        def __init__(self, **kwargs):
-            self.size_canvas = None
-            self.play_mode = False
-            super().__init__(**kwargs)
-
-        def parse_arguments(self, parser):
-            super().parse_arguments(parser)
-            parser.add_argument("-sc", "--size_canvas_resize",
-                                help="Change the size of the image passed by Unity. Put 0 to prevent resizing",
-                                type=str,
-                                default='224_224')
-            parser.add_argument("-play", "--play_mode",
-                                help="Execute in play mode",
-                                type=lambda x: bool(int(x)),
-                                default=0)
-            return parser
-
-        def finalize_init(self, PARAMS, list_tags):
-            self.play_mode = PARAMS['play_mode']
-            self.size_canvas = PARAMS['size_canvas_resize']
-            # list_tags.append("Unity")
-            list_tags.append('sc{}'.format(str(self.size_canvas).replace(', ', 'x'))) if self.size_canvas != '0' else None
-
-            if self.size_canvas == '0':
-                self.size_canvas = (128, 128)  # ToDo: this could be taken from the unity channel
-            else:
-                self.size_canvas = tuple([int(i) for i in self.size_canvas.split("_")])
-            super().finalize_init(PARAMS, list_tags)
-
-        def prepare_train_callbacks(self, log_text, train_loader, test_loaders=None):
-            class CheckStoppingLevel:
-                there_is_another_level = True
-
-                def go_next_level(self, logs, *args, **kwargs):
-                    if self.there_is_another_level:
-                        self.there_is_another_level = train_loader.dataset.sampler.env_params.next_level()
-                        framework_utils.weblog_dataset_info(train_loader, f'Increase {train_loader.dataset.sampler.env_params.count_increase}', weblogger=self.weblogger)  # the idea is that after reaching the end level, we wait another stagnMation
-                    else:
-                        print("No new level, reached maximum")
-                        logs['stop'] = True
-
-            # AverageChangeMetric(loss_or_acc='acc',  use_cuda=self.use_cuda, log_every=nept_check_every, log_text='avrgChange/acc'),
-            all_cb = super().prepare_train_callbacks(log_text, train_loader, test_loaders=test_loaders)
-            ck = CheckStoppingLevel()
-            all_cb += [PlotUnityImagesEveryOnceInAWhile(dataset=train_loader.dataset,
-                                                        plot_every=1000,
-                                                        plot_only_n_times=20),
-                       # TriggerActionWithPatience(min_delta=0.01, patience=400, percentage=True, mode='max',
-                       #                           reaching_goal=90,
-                       #                           metric_name='webl/mean_acc' if self.weblogger else 'cnsl/mean_acc',
-                       #                           check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
-                       #                           triggered_action=ck.go_next_level)]
-                       ]
-            return all_cb
-
-        def prepare_test_callbacks(self, log_text, testing_loader, save_dataframe):
-            all_cb = super().prepare_test_callbacks(log_text, testing_loader, save_dataframe)
-            all_cb += [PlotUnityImagesEveryOnceInAWhile(dataset=testing_loader.dataset,
-                                                        plot_every=1000,
-                                                        plot_only_n_times=5),
-                       SequenceLearning3dDataFrameSaver(k=testing_loader.dataset.sampler.k,
-                                                        nSt=testing_loader.dataset.sampler.nSt,
-                                                        nSc=testing_loader.dataset.sampler.nSc,
-                                                        nFt=testing_loader.dataset.sampler.nFt,
-                                                        nFc=testing_loader.dataset.sampler.nFc,
-                                                        num_classes=self.k,
-                                                        use_cuda=self.use_cuda,
-                                                        network_name=self.network_name,
-                                                        size_canvas=self.size_canvas,
-                                                        log_text_plot=log_text,
-                                                        weblogger=self.weblogger,
-                                                        output_and_softmax=False)
-                       ]
-            return all_cb
-
-    return UnityExp
-
-
-sequence_unity_meta_learning_exp = unity_builder_class(with_dataset_name(SequentialMetaLearningExp))
