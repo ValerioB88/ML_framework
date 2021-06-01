@@ -1,13 +1,7 @@
 import torch
-import framework_utils
 from framework_utils import make_cuda
-from generate_datasets.generators.utils_generator import get_background_color
 import numpy as np
-import PIL.Image as Image
 from abc import ABC, abstractmethod
-from generate_datasets.generators.extension_generators import symmetric_steps
-from generate_datasets.generators.input_image_generator import InputImagesGenerator
-import matplotlib.pyplot as plt
 from enum import Enum
 
 class CompareWith(Enum):
@@ -17,7 +11,7 @@ class CompareWith(Enum):
 
 
 class DistanceActivation(ABC):
-    def __init__(self, net, dataset: InputImagesGenerator = None, distance='cossim', use_cuda=None, compare_with=CompareWith.SAME_OBJECT):
+    def __init__(self, net, dataset=None, distance='cossim', use_cuda=None, compare_with=CompareWith.SAME_OBJECT):
         self.cuda = False
         self.distance = distance
         if use_cuda is None:
@@ -171,80 +165,4 @@ class DistanceActivation(ABC):
         for c in range(dataset.num_classes):
             cossim_net[c], cossim_img[c], x_values = self.get_cosine_similarity_one_class_random_img(c, dataset)
 
-        # self.remove_hooks()
         return cossim_net, cossim_img, x_values
-
-
-    # def get_canvas(self, image, class_num, rotation, size, center):
-    #     # random_center = dataset._get_translation(label, image_name, idx)
-    #     canvas = framework_utils.copy_img_in_canvas(image.resize(size).rotate(rotation, expand=True), self.dataset.size_canvas, center, color_canvas=get_background_color(self.dataset.background_color_type))
-    #     canvas, label, more = self.dataset._finalize_get_item(canvas, class_num, {'center': center})
-    #     canvas = self.dataset.transform(canvas)
-    #     return canvas
-
-
-class DistanceActivationTranslation(DistanceActivation):
-    """
-    We compute cosine similarity between the leftmost-centered object and the ones on the horizontal line
-    """
-    def get_base_and_other_canvasses(self, class_num, name_class):
-        num = np.random.choice(len(self.dataset.samples[name_class]))
-        image_name = self.dataset.samples[name_class][num]
-
-        image = Image.open(self.dataset.folder + '/' + image_name)
-        other_canvasses = []
-        image, *_ = self.dataset._resize(image)
-        minX, maxX, minY, maxY = self.dataset.translations_range[name_class]
-        stepsX = symmetric_steps(minX, maxX, self.dataset.size_canvas, grid_step_size=10)
-        stepY = self.dataset.size_canvas[1] // 2
-        base_center = (stepsX[0], stepY)
-
-        base_canvas = self.get_canvas(image, class_num, rotation=0, size=self.dataset.size_object, center=base_center)
-        for stX in stepsX:
-            center = (stX, stepY)
-            other_canvasses.append(self.get_canvas(image, class_num, rotation=0, size=self.dataset.size_object, center=center))
-
-        return base_canvas, other_canvasses, stepsX
-
-
-class DistanceActivationScale(DistanceActivation):
-    """
-    We compute cosine similarity between the leftmost-centered object and the ones on the horizontal line
-    """
-    def get_base_and_other_canvasses(self, class_num, name_class):
-        num = np.random.choice(len(self.dataset.samples[name_class]))
-        image_name = self.dataset.samples[name_class][num]
-
-        image = Image.open(self.dataset.folder + '/' + image_name)
-        other_canvasses = []
-        minX, maxX, minY, maxY = self.dataset.translations_range[name_class]
-        resize_factor = np.arange(0.1, 2.5 + 0.2, 0.2)
-        sizes = [(int(self.dataset.size_object[0] * i), int(self.dataset.size_object[1] * i)) for i in resize_factor]
-
-        base_canvas = self.get_canvas(image, class_num, center=(minX, minY), size=self.dataset.size_object, rotation=0)
-        for size in sizes:
-            other_canvasses.append(self.get_canvas(image, class_num, center=(minX, minY), size=size, rotation=0))
-
-        return base_canvas, other_canvasses, sizes
-
-
-class DistanceActivationRotate(DistanceActivation):
-    """
-    We compute cosine similarity between the leftmost-centered object and the ones on the horizontal line
-    """
-    def get_base_and_other_canvasses(self, class_num, name_class):
-        num = np.random.choice(len(self.dataset.samples[name_class]))
-        image_name = self.dataset.samples[name_class][num]
-
-        image = Image.open(self.dataset.folder + '/' + image_name)
-
-
-        other_canvasses = []
-        minX, maxX, minY, maxY = self.dataset.translations_range[name_class]
-        rotations = np.arange(0, 360, 10)
-
-        base_canvas = self.get_canvas(image, class_num, center=(minX, minY), size=self.dataset.size_object, rotation=0)
-        for rot in rotations:
-            other_canvasses.append(self.get_canvas(image, class_num, center=(minX, minY), size=self.dataset.size_object, rotation=rot))
-
-        return base_canvas, other_canvasses, rotations

@@ -1,24 +1,10 @@
 from sty import fg, bg, ef, rs
-import collections
-import torchvision
 import cloudpickle
-import glob
-from enum import Enum
-import re
 import argparse
-from torch.optim import Adam
 from abc import ABC, abstractmethod
-from functools import partial
-from typing import Dict, List, Callable, Union
-from torch.nn.modules.loss import MSELoss, CrossEntropyLoss, NLLLoss
-from generate_datasets.generators.translate_generator import TranslateGenerator
 from callbacks import *
-import framework_utils as utils
-from models.meta_learning_models import MatchingNetwork, RelationNetSung, get_few_shot_encoder, get_few_shot_encoder_basic, get_few_shot_evaluator
 from models.sequence_learner import *
-from models.smallCNN import smallCNNnp, smallCNNp
 from train_net import *
-import time
 import random
 from torch.optim.lr_scheduler import MultiStepLR
 
@@ -505,6 +491,7 @@ def create_backbone_exp(obj_class):
 
 
             return parser
+
 
         def backbone(self) -> nn.Module:
             return NotImplementedError
