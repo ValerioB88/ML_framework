@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torchvision
 from PIL import ImageStat
-from sty import fg, rs
+from sty import fg, rs, ef
 from torchvision import transforms as tf
 from torchvision.datasets import ImageFolder
 
@@ -21,6 +21,7 @@ class MyImageFolder(ImageFolder):
         return sample, labels, info
 
     def __init__(self, name_classes=None, *args, **kwargs):
+        print(fg.red + ef.inverse + "ROOT:  " + kwargs['root'] + rs.inverse + rs.fg)
         self.name_classes = name_classes
         super().__init__(*args, **kwargs)
 
@@ -66,6 +67,7 @@ def add_compute_stats(obj_class):
             @param kwargs:
             """
             print(fg.yellow + f"\n**Creating Dataset [" + fg.cyan + f"{name_generator}" + fg.yellow + "]**" + rs.fg)
+
             super().__init__(**kwargs)
             self.idx_to_class = {v: k for k, v in self.class_to_idx.items()}
 
