@@ -568,6 +568,7 @@ class DuringTrainingTest(Callback):
         def test(testing_loader, log=''):
             print(f"Testing " + fg.green + f"[{testing_loader.dataset.name_generator}]" + rs.fg)
             mid_test_cb = [
+                StopWhenMetricIs(value_to_reach=100, metric_name='tot_iter', check_after_batch=True),
                 StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
                 TotalAccuracyMetric(use_cuda=self.use_cuda,
                                     weblogger=self.weblogger, log_text=self.log_text + log)]
@@ -582,12 +583,12 @@ class DuringTrainingTest(Callback):
         print("TEST IN EVAL MODE")
         self.model.eval()
         for testing_loader in self.testing_loaders:
-            test(testing_loader, log=f' [{testing_loader.dataset.name_generator}]')
+            test(testing_loader, log=f' EVALmode [{testing_loader.dataset.name_generator}]')
 
         self.model.train()
         print("TEST IN TRAIN MODE")
         for testing_loader in self.testing_loaders:
-            test(testing_loader, log=f' [{testing_loader.dataset.name_generator}]')
+            test(testing_loader, log=f' TRAINmode [{testing_loader.dataset.name_generator}]')
 
         self.num_tests += 1
 

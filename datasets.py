@@ -34,7 +34,6 @@ class MyImageFolder(ImageFolder):
             class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
         return classes, class_to_idx
 
-
     def __getitem__(self, index):
         path, target = self.samples[index]
         sample = self.loader(path)
@@ -82,7 +81,6 @@ def add_compute_stats(obj_class):
             self.additional_transform = add_PIL_transforms
             self.num_image_calculate_mean_std = num_image_calculate_mean_std
             self.num_classes = len(self.classes)
-            self.name_classes = self.classes
 
             compute_stats = False
 

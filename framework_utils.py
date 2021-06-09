@@ -221,7 +221,7 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
     if isinstance(weblogger, neptune.run.Run):
         weblogger['Logs'] = f'{dataset_name} mean: {stats["mean"]}, std: {stats["std"]}'
 
-    nc = dataset.name_classes
+    nc = dataset.classes
     for idx, data in enumerate(dataloader):
         images, labels, more = data
         plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger)

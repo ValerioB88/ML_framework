@@ -28,9 +28,9 @@ class Experiment(ABC):
             print("Running experiment in " + ef.inverse + "SCRIPT" + rs.inverse + " mode. Command line arguments will have the precedence over keywords arguments.")
             PARAMS = vars(parser.parse_known_args()[0])
             # only update the parser args that are NOT the defaults (so the one actually passed by user
-            kwargs.update({k:v for k,v  in PARAMS.items() if parser.get_default(k)!=v })
+            kwargs.update({k: v for k, v  in PARAMS.items() if parser.get_default(k)!=v })
             # Update with default arguments for all the arguments not passed by kwargs
-            kwargs.update({k:v for k,v in PARAMS.items() if k not in kwargs})
+            kwargs.update({k: v for k, v in PARAMS.items() if k not in kwargs})
             PARAMS = kwargs
         self.net = None
         self.current_run = -1
@@ -422,7 +422,50 @@ class SupervisedLearningExperiment(Experiment):
 
     @abstractmethod
     def get_net(self, num_classes=None):
-        return NotImplementedError
+        if self.pretraining == 'ImageNet':
+            imagenet_pt = True
+            print(fg.red + "Loading ImageNet" + rs.fg)
+        else:
+            imagenet_pt = False
+        nc = 1000 if imagenet_pt else num_classes
+        if self.network_name == 'vgg16':
+            self.net = torchvision.models.vgg16(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            self.net.classifier[-1] = nn.Linear(self.net.classifier[-1].in_features, num_classes)
+        elif self.network_name == 'vgg16bn':
+            self.net = torchvision.models.vgg16_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            self.net.classifier[-1] = nn.Linear(self.net.classifier[-1].in_features, num_classes)
+        elif self.network_name == 'vgg11bn':
+            self.net = torchvision.models.vgg11_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            self.net.classifier[-1] = nn.Linear(self.net.classifier[-1].in_features, num_classes)
+        elif self.network_name == 'vgg19bn':
+            self.net = torchvision.models.vgg19_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            self.net.classifier[-1] = nn.Linear(self.net.classifier[-1].in_features, num_classes)
+        elif self.network_name == 'resnet18':
+            self.net = torchvision.models.resnet18(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            self.net.fc = nn.Linear(self.net.fc.in_features, num_classes)
+        elif self.network_name == 'resnet50':
+            self.net = torchvision.models.resnet50(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            self.net.fc = nn.Linear(self.net.fc.in_features, num_classes)
+        elif self.network_name == 'alexnet':
+            self.net = torchvision.models.alexnet(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            self.net.classifier[-1] = nn.Linear(self.net.classifier[-1].in_features, num_classes)
+        elif self.network_name == 'inception_v3':  # nope
+            self.net = torchvision.models.inception_v3(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            self.net.fc = nn.Linear(self.net.fc.in_features, num_classes)
+        elif self.network_name == 'densenet201':
+            self.net = torchvision.models.densenet201(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            self.net.classifier = nn.Linear(self.net.classifier.in_features, num_classes)
+        elif self.network_name == 'googlenet':
+            self.net = torchvision.models.googlenet(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            self.net.fc = nn.Linear(self.net.fc.in_features, num_classes)
+        else:
+            assert False, f"Network name {self.network_name} not recognized"
+
+        self.step = standard_net_step
+        self.loss_fn = torch.nn.CrossEntropyLoss()
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.0001)
+
+        return self.net
 
     def prepare_train_callbacks(self, log_text, train_loader, test_loaders=None):
         num_classes = self._get_num_classes(train_loader)
