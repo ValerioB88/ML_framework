@@ -568,7 +568,15 @@ class DuringTrainingTest(Callback):
         def test(testing_loader, log=''):
             print(f"Testing " + fg.green + f"[{testing_loader.dataset.name_generator}]" + rs.fg)
             mid_test_cb = [
+<<<<<<< Updated upstream
                 StopWhenMetricIs(value_to_reach=100, metric_name='tot_iter', check_after_batch=True),
+=======
+<<<<<<< HEAD
+                # StopWhenMetricIs(value_to_reach=10, metric_name='tot_iter', check_after_batch=True),
+=======
+                StopWhenMetricIs(value_to_reach=100, metric_name='tot_iter', check_after_batch=True),
+>>>>>>> A lot of networks can be selected by using the Supervised Experiment
+>>>>>>> Stashed changes
                 StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
                 TotalAccuracyMetric(use_cuda=self.use_cuda,
                                     weblogger=self.weblogger, log_text=self.log_text + log)]
