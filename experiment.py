@@ -1,6 +1,9 @@
 import cloudpickle
 import argparse
 from abc import ABC, abstractmethod
+
+import torch.cuda
+
 from callbacks import *
 from models.sequence_learner import *
 from train_net import *
@@ -103,7 +106,7 @@ class Experiment(ABC):
         self.optimizer = optimizer
 
     def parse_arguments(self, parser):
-        parser.add_argument('-seed', "--seed", type=int, default=None)
+        parser.add_argument('-seed', "--seed", type=int, default=1)
         parser.add_argument("-r", "--num_runs",
                             help="run experiment n times",
                             type=int,
@@ -246,7 +249,7 @@ class Experiment(ABC):
                                                   min_delta_is_percentage=False, reaching_goal=None,
                                                   metric_name='webl/mean_loss' if self.weblogger else 'cnsl/mean_loss',
                                                   check_every=self.weblog_check_every if self.weblogger else self.console_check_every,
-                                                  triggered_action=stop, action_name='Early Stopping', alpha=0.1,
+                                                  triggered_action=stop, action_name='Early Stopping', alpha=0.05,
                                                   weblogger=self.weblogger)])  # for stagnation
         # Extra Stopping Rule. When loss is 0, just stop.
         all_cb += ([TriggerActionWithPatience(mode='min',
@@ -259,7 +262,7 @@ class Experiment(ABC):
                                               weblogger=self.weblogger)])
 
         if test_loaders is not None:
-            all_cb += ([DuringTrainingTest(testing_loaders=test_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, multiple_sec_of_test_time=4, weblogger=self.weblogger, log_text='test during train', use_cuda=self.use_cuda, call_run=self.call_run)])
+            all_cb += ([DuringTrainingTest(testing_loaders=test_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, multiple_sec_of_test_time=None, auto_increase=True, weblogger=self.weblogger, log_text='test during train', use_cuda=self.use_cuda, call_run=self.call_run)])
 
         if self.weblogger:
             all_cb += [StandardMetrics(log_every=self.weblog_check_every, print_it=False,
@@ -275,7 +278,7 @@ class Experiment(ABC):
 
     def train(self, train_loader, callbacks=None, test_loaders=None, log_text='train'):
         print(f"**Training** [{log_text}]")
-        self.net = self.get_net(new_num_classes=self._get_num_classes(train_loader))
+        self.net = self.get_net(num_classes=self._get_num_classes(train_loader))
         if not self.optimizer or not self.loss_fn:
             assert False, "Optimizer or Loss Function not set"
         self.experiment_loaders[self.current_run]['training'].append(train_loader)
@@ -366,6 +369,7 @@ class Experiment(ABC):
         else:
             Warning('Results path is not specified!')
         if self.weblogger == 2:
+            self.weblogger['STATUS'] = 'Success'
             neptune.stop()
 
 
@@ -415,57 +419,95 @@ class SupervisedLearningExperiment(Experiment):
                                               weblogger=self.weblogger, log_text_plot=log_text)])
         if save_dataframe and dataframe_saver is not None:
             all_cb += ([dataframe_saver(num_classes,
-                                              self.use_cuda,
-                                              self.network_name, self.size_canvas,
-                                              weblogger=self.weblogger, log_text_plot=log_text)])
+                                        self.use_cuda,
+                                        self.network_name, self.size_canvas,
+                                        weblogger=self.weblogger, log_text_plot=log_text)])
         return all_cb
 
-    @abstractmethod
-    def get_net(self, num_classes=None):
-        if self.pretraining == 'ImageNet':
-            imagenet_pt = True
+    @classmethod
+    def get_net_ff(cls, network_name, imagenet_pt=False, num_classes=1000):
+        # if pretraining == 'ImageNet':
+        #     imagenet_pt = True
+        if imagenet_pt:
             print(fg.red + "Loading ImageNet" + rs.fg)
-        else:
-            imagenet_pt = False
-        nc = 1000 if imagenet_pt else num_classes
-        if self.network_name == 'vgg16':
-            self.net = torchvision.models.vgg16(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            self.net.classifier[-1] = nn.Linear(self.net.classifier[-1].in_features, num_classes)
-        elif self.network_name == 'vgg16bn':
-            self.net = torchvision.models.vgg16_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            self.net.classifier[-1] = nn.Linear(self.net.classifier[-1].in_features, num_classes)
-        elif self.network_name == 'vgg11bn':
-            self.net = torchvision.models.vgg11_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            self.net.classifier[-1] = nn.Linear(self.net.classifier[-1].in_features, num_classes)
-        elif self.network_name == 'vgg19bn':
-            self.net = torchvision.models.vgg19_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            self.net.classifier[-1] = nn.Linear(self.net.classifier[-1].in_features, num_classes)
-        elif self.network_name == 'resnet18':
-            self.net = torchvision.models.resnet18(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            self.net.fc = nn.Linear(self.net.fc.in_features, num_classes)
-        elif self.network_name == 'resnet50':
-            self.net = torchvision.models.resnet50(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            self.net.fc = nn.Linear(self.net.fc.in_features, num_classes)
-        elif self.network_name == 'alexnet':
-            self.net = torchvision.models.alexnet(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            self.net.classifier[-1] = nn.Linear(self.net.classifier[-1].in_features, num_classes)
-        elif self.network_name == 'inception_v3':  # nope
-            self.net = torchvision.models.inception_v3(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            self.net.fc = nn.Linear(self.net.fc.in_features, num_classes)
-        elif self.network_name == 'densenet201':
-            self.net = torchvision.models.densenet201(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            self.net.classifier = nn.Linear(self.net.classifier.in_features, num_classes)
-        elif self.network_name == 'googlenet':
-            self.net = torchvision.models.googlenet(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            self.net.fc = nn.Linear(self.net.fc.in_features, num_classes)
-        else:
-            assert False, f"Network name {self.network_name} not recognized"
 
+        nc = 1000 if imagenet_pt else num_classes
+        if network_name == 'vgg11':
+            net = torchvision.models.vgg11(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+        elif network_name == 'vgg11bn':
+            net = torchvision.models.vgg11_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+        elif network_name == 'vgg16':
+            net = torchvision.models.vgg16(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+        elif network_name == 'vgg16bn':
+            net =  torchvision.models.vgg16_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+        elif network_name == 'vgg19bn':
+            net = torchvision.models.vgg19_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+        elif network_name == 'resnet18':
+            net = torchvision.models.resnet18(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.fc = nn.Linear(net.fc.in_features, num_classes)
+        elif network_name == 'resnet50':
+            net = torchvision.models.resnet50(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.fc = nn.Linear(net.fc.in_features, num_classes)
+        elif network_name == 'alexnet':
+            net = torchvision.models.alexnet(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+        elif network_name == 'inception_v3':  # nope
+            net = torchvision.models.inception_v3(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.fc = nn.Linear(net.fc.in_features, num_classes)
+        elif network_name == 'densenet121':
+            net = torchvision.models.densenet121(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.classifier = nn.Linear(net.classifier.in_features, num_classes)
+        elif network_name == 'densenet201':
+            net = torchvision.models.densenet201(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.classifier = nn.Linear(net.classifier.in_features, num_classes)
+        elif network_name == 'googlenet':
+            net = torchvision.models.googlenet(pretrained=imagenet_pt, progress=True, num_classes=nc)
+            net.fc = nn.Linear(net.fc.in_features, num_classes)
+        else:
+            net = cls.get_other_nets(network_name, num_classes, imagenet_pt)
+            assert False if net is False else True, f"Network name {network_name} not recognized"
+
+        return net
+
+    @staticmethod
+    def load_pretraining(net, pretraining, use_cuda=None):
+        if use_cuda is None:
+            use_cuda = torch.cuda.is_available()
+        if pretraining != 'vanilla':
+            if os.path.isfile(pretraining):
+                print(fg.red + f"Loading.. full model from {pretraining}..." + rs.fg, end="")
+                ww = torch.load(pretraining, map_location='cuda' if use_cuda else 'cpu')['full']
+                net.load_state_dict(ww)
+                print(fg.red + " Done." + rs.fg)
+            else:
+                assert False, f"Pretraining path not found {pretraining}"
+
+        return net
+
+
+    def get_net(self, num_classes=None):
+        self.net = self.get_net_ff(self.network_name, True if self.pretraining == 'ImageNet' else False, num_classes)
+        pretraining_file = 'vanilla' if self.pretraining == 'ImageNet' else self.pretraining
+        self.net = self.load_pretraining(self.net, pretraining_file, self.use_cuda)
         self.step = standard_net_step
         self.loss_fn = torch.nn.CrossEntropyLoss()
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.0001)
+        framework_utils.print_net_info(self.net) if self.verbose else None
+        self.net.cuda() if self.use_cuda else None
 
         return self.net
+
+    @staticmethod
+    def get_other_nets(self, num_classes):
+        """
+        A function that can be overwritten by subclasses to add more specialized networks
+        """
+        return False
 
     def prepare_train_callbacks(self, log_text, train_loader, test_loaders=None):
         num_classes = self._get_num_classes(train_loader)

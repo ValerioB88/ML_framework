@@ -32,7 +32,7 @@ class DistanceActivation(ABC):
         self.setup_network()
 
     @abstractmethod
-    def get_base_and_other_canvasses(self, class_num, name_class):
+    def get_base_and_other_canvasses(self, class_num, name_class, **kwargs):
         raise NotImplementedError
 
     def finalize_each_class(self, name_class, cossim, cossim_imgs,  x_values):
@@ -69,25 +69,26 @@ class DistanceActivation(ABC):
             return torch.sqrt(torch.dot(diff, diff)).item()
 
     def get_cosine_similarity_from_images(self, base_canvas, other_canvasses):
-        prediction_base = torch.argmax(self.net(make_cuda(base_canvas.unsqueeze(0), self.cuda))).item()
-        base_activation = {}
-        # base_activation = activation['one_to_last']
-        # i= 0
-        all_used_layers = [] # this may be useful in case of splitting networks
-        for name, features in self.activation.items():
-            if not np.any([i in name for i in self.only_save]):
-                continue
-            base_activation[name] = features
-            # all_used_layers.append(name)
-            # if not self.all_layers_name[i] == name:
-            #     stop=1
-            # print(self.all_layers_name[i] == name)
-            # i+=1
-        # print(i)
-        # cos_fun = torch.nn.CosineSimilarity(dim=1)
+        # if len(base_canvas) == 1:
+        #     prediction_base = torch.argmax(self.net(make_cuda(base_canvas.unsqueeze(0), self.cuda))).item()
+        #     base_activation = {}
+        #     for name, features in self.activation.items():
+        #         if not np.any([i in name for i in self.only_save]):
+        #             continue
+        #         base_activation[name] = features
+        #
         distance_net = {}
         predictions = []
-        for canvas_comparison in other_canvasses:
+
+        for idx, canvas_comparison in enumerate(other_canvasses):
+            if len(base_canvas) > 1 or len(base_canvas) == 1 and idx == 0:
+                prediction_base = torch.argmax(self.net(make_cuda(base_canvas[idx].unsqueeze(0), self.cuda))).item()
+                base_activation = {}
+                for name, features in self.activation.items():
+                    if not np.any([i in name for i in self.only_save]):
+                        continue
+                    base_activation[name] = features
+
             canvas_comparison_activation = {}
             predictions.append(torch.argmax(self.net(make_cuda(canvas_comparison.unsqueeze(0), self.cuda))).item())
             for name, features in self.activation.items():
@@ -98,8 +99,10 @@ class DistanceActivation(ABC):
                     distance_net[name] = []
                 distance_net[name].append(self.compute_distance(base_activation[name], canvas_comparison_activation[name]))
 
-        distance_image = [self.compute_distance(base_canvas, c) for c in other_canvasses]
-
+        if len(base_canvas) == 1:
+            distance_image = [self.compute_distance(base_canvas, c) for c in other_canvasses]
+        else:
+            distance_image = [self.compute_distance(b, c) for b, c in zip(base_canvas, other_canvasses)]
         return distance_net, distance_image, (prediction_base, predictions)
 
     @staticmethod
@@ -124,14 +127,14 @@ class DistanceActivation(ABC):
             std = np.std(np.array([v for k, v in cossim_net.items()]), axis=0)
             return mean, std, None
 
-    def get_cosine_similarity_one_class_random_img(self, class_num, dataset):
+    def get_cosine_similarity_one_class_random_img(self, class_num, dataset, **kwargs):
         """
         cossim: [group class idx][name feature][list of cossim for each step]
         """
 
         name_class = dataset.idx_to_class[class_num]
 
-        base_canvas, other_canvasses, x_values = self.get_base_and_other_canvasses(class_num, name_class)
+        base_canvas, other_canvasses, x_values = self.get_base_and_other_canvasses(class_num, name_class, **kwargs)
         cossim_net, cossim_images,  p = self.get_cosine_similarity_from_images(base_canvas, other_canvasses)
         self.finalize_each_class(name_class, cossim_net, cossim_images, x_values)
         return cossim_net, cossim_images, x_values
@@ -154,7 +157,7 @@ class DistanceActivation(ABC):
         if self.was_train:
             self.net.train()
 
-    def calculate_distance_dataloader(self, dataset=None):
+    def calculate_distance_dataloader(self, dataset=None, **kwargs):
         # self.setup_network()
         if dataset is None:
             dataset = self.dataset
@@ -163,6 +166,6 @@ class DistanceActivation(ABC):
         cossim_net = {}
         cossim_img = {}
         for c in range(dataset.num_classes):
-            cossim_net[c], cossim_img[c], x_values = self.get_cosine_similarity_one_class_random_img(c, dataset)
+            cossim_net[c], cossim_img[c], x_values = self.get_cosine_similarity_one_class_random_img(c, dataset, **kwargs)
 
         return cossim_net, cossim_img, x_values
