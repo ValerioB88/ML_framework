@@ -24,7 +24,7 @@ import pandas as pd
 import signal, os
 # from neptunecontrib.api import log_chart
 import time
-
+import math
 class CallbackList(object):
     """Container abstracting a list of callbacks.
 
@@ -544,12 +544,15 @@ class DuringTrainingTest(Callback):
     test_time = 0
     num_tests = 0
 
-    def __init__(self, testing_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, weblogger=0, multiple_sec_of_test_time=None, log_text='', use_cuda=None, call_run=None):
+    def __init__(self, testing_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, weblogger=0, multiple_sec_of_test_time=None, auto_increase=False, log_text='', use_cuda=None, call_run=None):
         self.testing_loaders = testing_loaders
         self.use_cuda = use_cuda
         self.every_x_epochs = every_x_epochs
+        self.auto_increase = auto_increase
         self.every_x_iter = every_x_iter
         self.every_x_sec = every_x_sec
+        if self.auto_increase:
+            self.every_x_sec = 20
         self.weblogger = weblogger
         self.log_text = log_text
         self.call_run = call_run
@@ -559,7 +562,13 @@ class DuringTrainingTest(Callback):
     def on_train_begin(self, logs=None):
         self.time_from_last_test = time.time()
 
-    def run_tests(self):
+    def get_callbacks(self, log=''):
+        return [
+            StopWhenMetricIs(value_to_reach=100, metric_name='tot_iter', check_after_batch=True),
+                StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
+                TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                    weblogger=self.weblogger, log_text=self.log_text + log)]
+    def run_tests(self, logs):
         start_test_time = time.time()
         print(fg.green, end="")
         print(f"################ TEST DURING TRAIN - NUM {self.num_tests} ################")
@@ -567,20 +576,7 @@ class DuringTrainingTest(Callback):
 
         def test(testing_loader, log=''):
             print(f"Testing " + fg.green + f"[{testing_loader.dataset.name_generator}]" + rs.fg)
-            mid_test_cb = [
-<<<<<<< Updated upstream
-                StopWhenMetricIs(value_to_reach=100, metric_name='tot_iter', check_after_batch=True),
-=======
-<<<<<<< HEAD
-                # StopWhenMetricIs(value_to_reach=10, metric_name='tot_iter', check_after_batch=True),
-=======
-                StopWhenMetricIs(value_to_reach=100, metric_name='tot_iter', check_after_batch=True),
->>>>>>> A lot of networks can be selected by using the Supervised Experiment
->>>>>>> Stashed changes
-                StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
-                TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                    weblogger=self.weblogger, log_text=self.log_text + log)]
-
+            mid_test_cb = self.get_callbacks(log)
 
             with torch.no_grad():
                 _, logs = self.call_run(testing_loader,
@@ -602,6 +598,10 @@ class DuringTrainingTest(Callback):
 
         self.time_from_last_test = time.time()
         self.test_time = time.time() - start_test_time
+        if self.auto_increase and 'tot_iter' in logs:
+            self.every_x_sec = self.test_time + 0.5 * self.test_time * math.log(logs['tot_iter']+1, 1.2)
+            print("Test time is {:.4f} , next test is gonna happen in {:.4f}".format(self.test_time, self.every_x_sec))
+
         if self.multiple_sec_of_test_time:
             print("Test time is {:.4f} , next test is gonna happen in {:.4f}".format(self.test_time, self.test_time*self.multiple_sec_of_test_time))
         print(fg.green, end="")
@@ -611,7 +611,7 @@ class DuringTrainingTest(Callback):
     def on_epoch_begin(self, epoch, logs=None):
         if (self.every_x_epochs is not None and epoch % self.every_x_epochs == 0) or epoch==0:
             print(f"\nTest every {self.every_x_epochs} epochs")
-            self.run_tests()
+            self.run_tests(logs)
 
     def on_batch_end(self, batch, logs=None):
         if (self.every_x_iter is not None and logs['tot_iter'] % self.every_x_iter) or \
@@ -624,11 +624,11 @@ class DuringTrainingTest(Callback):
             if (self.multiple_sec_of_test_time is not None and time.time() - self.time_from_last_test > self.multiple_sec_of_test_time * self.test_time):
                 print(f"\nTest every {self.multiple_sec_of_test_time * self.test_time} seconds ({time.time() - self.time_from_last_test} secs passed from last test)")
 
-            self.run_tests()
+            self.run_tests(logs)
 
     def on_train_end(self, logs=None):
         print("End training")
-        self.run_tests()
+        self.run_tests(logs)
 
 
 class EndEpochStats(Callback):
@@ -860,9 +860,9 @@ class GenericDataFrameSaver(Callback):
                 assert softmax_correct_category != max_softmax if not correct else True, 'softmax values: {}, is correct? {}'.format(softmax, correct)
                 assert predicted == label if correct else predicted != label, 'softmax values: {}, is correct? {}'.format(softmax, correct)
 
-                self.rows_frames.append([self.network_name, int(label), int(predicted), correct, *add_logs, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output])
+                self.rows_frames.append([self.network_name, int(label), int(predicted), *add_logs, max_softmax, softmax_correct_category, *softmax, max_output, output_correct_category, *output, correct])
             else:
-                self.rows_frames.append([self.network_name, int(label), int(predicted), correct, *add_logs])
+                self.rows_frames.append([self.network_name, int(label), int(predicted), *add_logs, correct])
 
     def on_train_end(self, logs=None):
         data_frame = pd.DataFrame(self.rows_frames)
@@ -880,7 +880,7 @@ class PlotUnityImagesEveryOnceInAWhile(Callback):
     counter = 0
 
     def __init__(self, dataset, plot_every=100, plot_only_n_times=5):
-        self.dataset= dataset
+        self.dataset = dataset
         self.plot_every = plot_every
         self.plot_only_n_times = plot_only_n_times
 

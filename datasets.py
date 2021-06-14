@@ -20,9 +20,10 @@ class MyImageFolder(ImageFolder):
             info = {}
         return sample, labels, info
 
-    def __init__(self, name_classes=None, *args, **kwargs):
+    def __init__(self, name_classes=None, verbose=True, *args, **kwargs):
         print(fg.red + ef.inverse + "ROOT:  " + kwargs['root'] + rs.inverse + rs.fg)
         self.name_classes = name_classes
+        self.verbose = verbose
         super().__init__(*args, **kwargs)
 
     def _find_classes(self, dir: str):
@@ -66,7 +67,6 @@ def add_compute_stats(obj_class):
             @param kwargs:
             """
             print(fg.yellow + f"\n**Creating Dataset [" + fg.cyan + f"{name_generator}" + fg.yellow + "]**" + rs.fg)
-
             super().__init__(**kwargs)
             self.idx_to_class = {v: k for k, v in self.class_to_idx.items()}
 
@@ -115,14 +115,14 @@ def add_compute_stats(obj_class):
 
             self.transform.transforms += [normalize]
 
-            print(f'Map class_name -> labels: \n {self.class_to_idx}\n{len(self)} samples.')
+            print(f'Map class_name -> labels: {self.class_to_idx}\n{len(self)} samples.') if self.verbose else None
             self.finalize_init()
 
         def finalize_init(self):
             pass
 
         def call_compute_stats(self):
-            return compute_mean_and_std_from_dataset(self, None, max_iteration=self.num_image_calculate_mean_std)
+            return compute_mean_and_std_from_dataset(self, None, max_iteration=self.num_image_calculate_mean_std, verbose=self.verbose)
 
         def __getitem__(self, idx, class_name=None):
             image, *rest = super().__getitem__(idx)
@@ -177,7 +177,7 @@ def compute_mean_and_std_from_dataset(dataset, dataset_path=None, max_iteration=
     stop = False
     for data, _, _ in data_loader:
         for b in range(data.shape[0]):
-            if c % 10 == 9:
+            if c % 10 == 9 and verbose:
                 print(f'{c}/{max_iteration}, m: {np.array(statistics.mean)/255}, std: {np.array(statistics.stddev)/255}')
             c += 1
             if statistics is None:
@@ -189,9 +189,7 @@ def compute_mean_and_std_from_dataset(dataset, dataset_path=None, max_iteration=
                 break
         if stop:
             break
-    print()
-    print(np.array(statistics.mean)/255)
-    print(np.array(statistics.stddev) / 255)
+
     stats['time_one_iter'] = (time() - start)/max_iteration
     stats['mean'] = np.array(statistics.mean)/255
     stats['std'] = np.array(statistics.stddev) / 255

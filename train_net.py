@@ -65,7 +65,7 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, loader, train):
     output_batch = model(images)
 
     # framework_utils.imshow_batch(images, stats=loader.dataset.stats)
-    if model.training and isinstance(model, torchvision.models.GoogLeNet):
+    if hasattr(output_batch, 'logits'):
         output_batch = output_batch.logits
     loss = loss_fn(output_batch,
                    labels)

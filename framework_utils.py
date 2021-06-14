@@ -460,7 +460,7 @@ def compute_density(values, plot_args=None):
 
     canvas = np.empty(size_canvas)
     canvas[:] = np.nan
-    if isinstance(values, pd.DataFrame):
+    if isinstance(values, pd.Series) or isinstance(values, pd.DataFrame):
         x_values = np.array(values.index.get_level_values('transl_X'), dtype=int)
         y_values = np.array(values.index.get_level_values('transl_Y'), dtype=int)
         canvas[y_values, x_values] = values
@@ -485,9 +485,11 @@ def imshow_density(values, ax=None, plot_args=None, **kwargs):
     if ax is None:
         fig, ax = plt.subplots(1, 1)
     canvas = compute_density(values, plot_args)
-    # cm = plt.get_cmap(cmap)
-    # canvas = cm(canvas)
+    cm = plt.get_cmap(cmap)
+    canvas = cm(canvas)
     im = ax.imshow(canvas, **kwargs)
+    ax.set_xlim([0, canvas.shape[0]])
+    ax.set_ylim([0, canvas.shape[1]])
     if 'dataset' in list(plot_args.keys()):
         dataset = plot_args['dataset']
         if hasattr(dataset, 'minX'):
@@ -495,7 +497,6 @@ def imshow_density(values, ax=None, plot_args=None, **kwargs):
         elif hasattr(dataset, 'translations_range'):
             for groupID, rangeC in dataset.translations_range.items():
                 ax.add_patch(Rectangle((rangeC[0], rangeC[2]), rangeC[1] - rangeC[0], rangeC[3] - rangeC[2], edgecolor='r', facecolor='none', linewidth=2))
-    plt.show()
     return ax, im
 ##
 
