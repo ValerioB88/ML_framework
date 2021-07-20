@@ -39,7 +39,7 @@ class DistanceActivation(ABC):
         """
         Use for plotting, analysis, etc.
         """
-        pass;
+        return name_class, cossim, cossim_imgs,  x_values
 
     def get_activation(self, name):
         def hook(model, input, output):
@@ -136,7 +136,7 @@ class DistanceActivation(ABC):
 
         base_canvas, other_canvasses, x_values = self.get_base_and_other_canvasses(class_num, name_class, **kwargs)
         cossim_net, cossim_images,  p = self.get_cosine_similarity_from_images(base_canvas, other_canvasses)
-        self.finalize_each_class(name_class, cossim_net, cossim_images, x_values)
+        name_class, cossim_net, cossim_images, x_values = self.finalize_each_class(name_class, cossim_net, cossim_images, x_values)
         return cossim_net, cossim_images, x_values
 
     def setup_network(self):
