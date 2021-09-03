@@ -58,7 +58,7 @@ def add_return_path(class_obj):
 def add_compute_stats(obj_class):
     class ComputeStatsUpdateTransform(obj_class):
         ## This class basically is used for normalize Dataset Objects such as ImageFolder in order to be used in our more general framework
-        def __init__(self, name_generator, add_PIL_transforms=None, add_tensor_transforms=None, num_image_calculate_mean_std=70, stats=None, save_stats_file=None, **kwargs):
+        def __init__(self, name_generator='dataset', add_PIL_transforms=None, add_tensor_transforms=None, num_image_calculate_mean_std=70, stats=None, save_stats_file=None, **kwargs):
             """
 
             @param add_tensor_transforms:

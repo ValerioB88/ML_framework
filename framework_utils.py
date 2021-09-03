@@ -21,6 +21,7 @@ new_rc_params = {'text.usetex': False,
 mpl.rcParams.update(new_rc_params)
 desired_width = 420
 np.set_printoptions(linewidth=desired_width)
+torch.set_printoptions(linewidth=desired_width)
 pd.set_option("display.max.columns", None)
 pd.set_option("display.precision", 4)
 pd.set_option('display.width', desired_width)
@@ -387,6 +388,14 @@ def conver_tensor_to_plot(tensor, mean, std):
     if np.shape(image)[2] == 1:
         image = np.squeeze(image)
     return image
+
+def get_highest_number_file(folder, ext='[a-zA-Z]+'):
+    import glob
+    import re
+    all_files = glob.glob(folder + '*')
+    a = [re.findall(f"([0-9]+)\.{ext}$", i) for i in all_files]
+    a = [int(i[0]) if i else -np.inf for i in a]
+    return all_files[np.argmax(a)]
 
 
 def imshow_batch(inp, stats=None, labels=None, title_more='', maximize=True, ax=None):
