@@ -393,8 +393,10 @@ def get_highest_number_file(folder, ext='[a-zA-Z]+'):
     import glob
     import re
     all_files = glob.glob(folder + '*')
-    a = [re.findall(f"([0-9]+)\.{ext}$", i) for i in all_files]
+    a = [re.findall(rf"([0-9]+){ext}$", i) for i in all_files]
     a = [int(i[0]) if i else -np.inf for i in a]
+    if len(a) == 0:
+        assert False, f'Folder {folder} doest not contain the right type of file'
     return all_files[np.argmax(a)]
 
 
