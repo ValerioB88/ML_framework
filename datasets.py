@@ -22,7 +22,7 @@ class MyImageFolder(ImageFolder):
 
     def __init__(self, name_classes=None, verbose=True, *args, **kwargs):
         print(fg.red + ef.inverse + "ROOT:  " + kwargs['root'] + rs.inverse + rs.fg)
-        self.name_classes = name_classes
+        self.name_classes = np.sort(name_classes)
         self.verbose = verbose
         super().__init__(*args, **kwargs)
 
@@ -66,6 +66,7 @@ def add_compute_stats(obj_class):
             @param save_stats_file:
             @param kwargs:
             """
+            self.verbose = True
             print(fg.yellow + f"\n**Creating Dataset [" + fg.cyan + f"{name_generator}" + fg.yellow + "]**" + rs.fg)
             super().__init__(**kwargs)
             self.idx_to_class = {v: k for k, v in self.class_to_idx.items()}

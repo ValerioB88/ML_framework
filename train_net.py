@@ -7,7 +7,7 @@ from typing import Callable, List, Union
 
 import torchvision.models
 
-from callbacks import ProgressBarLogger, CallbackList, Callback
+from callbacks import CallbackList, Callback
 from framework_utils import make_cuda
 import framework_utils
 from torch._six import inf
@@ -179,11 +179,8 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, loader, train, 
     return loss, queries_real_labels, prediction_real_labels, logs
 
 
-def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, iteration_step_kwargs=None):
+def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, **kwargs):
     torch.cuda.empty_cache()
-
-    if iteration_step_kwargs is None:
-        iteration_step_kwargs = {}
 
     make_cuda(net, use_cuda)
 
@@ -198,7 +195,6 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
     tot_iter = 0
     epoch = 0
     logs['tot_iter'] = 0
-
     while True:
         callbacks.on_epoch_begin(epoch)
         logs['epoch'] = epoch
@@ -207,8 +203,7 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
 
             callbacks.on_batch_begin(batch_index, logs)
 
-            loss, y_true, y_pred, new_batch_logs = iteration_step(data, net, loss_fn, optimizer, use_cuda, **iteration_step_kwargs)
-
+            loss, y_true, y_pred, new_batch_logs = iteration_step(data, net, loss_fn, optimizer, use_cuda, **kwargs)
             logs.update({'y_pred': y_pred, 'loss': loss.item(), 'y_true': y_true, 'tot_iter': tot_iter, 'stop': False, **new_batch_logs})
 
             callbacks.on_training_step_end(batch_index, logs)

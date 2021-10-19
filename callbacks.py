@@ -160,139 +160,6 @@ class Callback(object):
         pass
 
 
-class ProgressBarLogger(Callback):
-    """TQDM progress bar that displays the running average of loss and other metrics."""
-
-    def __init__(self):
-        super(ProgressBarLogger, self).__init__()
-
-    def on_train_begin(self, logs=None):
-        self.num_batches = self.params['num_batches']
-        self.verbose = self.params['verbose']
-        self.metrics = ['loss'] + self.params['metrics']
-
-    def on_epoch_begin(self, epoch, logs=None):
-        self.target = self.num_batches
-        self.pbar = tqdm(total=self.target, desc='Epoch {}'.format(epoch))
-        self.seen = 0
-
-    def on_batch_begin(self, batch, logs=None):
-        self.log_values = {}
-
-    def on_batch_end(self, batch, logs=None):
-        logs = logs or {}
-        self.seen += 1
-
-        for k in self.metrics:
-            if k in logs:
-                self.log_values[k] = logs[k]
-
-        # Skip progbar update for the last batch;
-        # will be handled by on_epoch_end.
-        if self.verbose and self.seen < self.target:
-            self.pbar.update(1)
-            self.pbar.set_postfix(self.log_values)
-
-    def on_epoch_end(self, epoch, logs=None):
-        # Update log values
-        self.log_values = {}
-        for k in self.metrics:
-            if k in logs:
-                self.log_values[k] = logs[k]
-
-        if self.verbose:
-            self.pbar.update(1)
-            self.pbar.set_postfix(self.log_values)
-
-        self.pbar.close()
-
-class ModelCheckpoint(Callback):
-    """Save the model after every epoch.
-
-    `filepath` can contain named formatting options, which will be filled the value of `epoch` and keys in `logs`
-    (passed in `on_epoch_end`).
-
-    For example: if `filepath` is `weights.{epoch:02d}-{val_loss:.2f}.hdf5`, then the model checkpoints will be saved
-    with the epoch number and the validation loss in the filename.
-
-    # Arguments
-        filepath: string, path to save the model file.
-        monitor: quantity to monitor.
-        verbose: verbosity mode, 0 or 1.
-        save_best_only: if `save_best_only=True`,
-            the latest best model according to
-            the quantity monitored will not be overwritten.
-        mode: one of {auto, min, max}.
-            If `save_best_only=True`, the decision
-            to overwrite the current save file is made
-            based on either the maximization or the
-            minimization of the monitored quantity. For `val_acc`,
-            this should be `max`, for `val_loss` this should
-            be `min`, etc. In `auto` mode, the direction is
-            automatically inferred from the name of the monitored quantity.
-        save_weights_only: if True, then only the model's weights will be
-            saved (`model.save_weights(filepath)`), else the full model
-            is saved (`model.save(filepath)`).
-        period: Interval (number of epochs) between checkpoints.
-    """
-
-    def __init__(self, filepath, monitor='val_loss', verbose=0, save_best_only=False, mode='auto', period=1):
-        super(ModelCheckpoint, self).__init__()
-        self.monitor = monitor
-        self.verbose = verbose
-        self.filepath = filepath
-        self.save_best_only = save_best_only
-        self.period = period
-        self.epochs_since_last_save = 0
-
-        if mode not in ['auto', 'min', 'max']:
-            raise ValueError('Mode must be one of (auto, min, max).')
-
-        if mode == 'min':
-            self.monitor_op = np.less
-            self.best = np.Inf
-        elif mode == 'max':
-            self.monitor_op = np.greater
-            self.best = -np.Inf
-        else:
-            if 'acc' in self.monitor or self.monitor.startswith('fmeasure'):
-                self.monitor_op = np.greater
-                self.best = -np.Inf
-            else:
-                self.monitor_op = np.less
-
-        self.best = np.Inf
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        self.epochs_since_last_save += 1
-        if self.epochs_since_last_save >= self.period:
-            self.epochs_since_last_save = 0
-            filepath = self.filepath.format(epoch=epoch + 1, **logs)
-            if self.save_best_only:
-                current = logs.get(self.monitor)
-                if current is None:
-                    warnings.warn('Can save best model only with %s available, '
-                                  'skipping.' % (self.monitor), RuntimeWarning)
-                else:
-                    if self.monitor_op(current, self.best):
-                        if self.verbose > 0:
-                            print('\nEpoch %05d: %s improved from %0.5f to %0.5f,'
-                                  ' saving model to %s'
-                                  % (epoch + 1, self.monitor, self.best,
-                                     current, filepath))
-                        self.best = current
-                        torch.save(self.model.state_dict(), filepath)
-                    else:
-                        if self.verbose > 0:
-                            print('\nEpoch %05d: %s did not improve from %0.5f' %
-                                  (epoch + 1, self.monitor, self.best))
-            else:
-                if self.verbose > 0:
-                    print('\nEpoch %05d: saving model to %s' % (epoch + 1, filepath))
-                torch.save(self.model.state_dict(), filepath)
-
-
 class StopFromUserInput(Callback):
     stop_next_iter = False
 
@@ -308,35 +175,6 @@ class StopFromUserInput(Callback):
             logs['stop'] = True
             print('Stopping from user input')
 
-# class TriggerWithExpMovAverage(Callback):
-#     first_time = True
-#
-#     def __init__(self, type='min', reaching_goal=90, metric_name='nept/mean_acc', check_every=100, triggered_action=None, alpha=0.5, action_name=''):
-#         self.reaching_goal = reaching_goal
-#         self.metric_name = metric_name
-#         self.check_every = check_every
-#         self.triggered_action = triggered_action
-#         self.alpha = alpha
-#         self.exp_fun = None
-#         self.type = type
-#         self.action_name
-#         self.string = f'ExpMovingAverageAction: {self.action_name} : metric [{self.metric_name}] {self.type} than {self.reaching_goal}, checking every [{self.check_every} batch iters]'
-#         print(f'Set up action: {self.string}')
-#
-#
-#     def on_batch_end(self, batch, logs=None):
-#         if self.first_time:
-#             self.exp_fun = framework_utils.ExpMovingAverage(logs[self.metric_name], alpha=self.alpha)
-#             self.first_time = False
-#         else:
-#             if logs['tot_iter'] % self.check_every == 0:
-#                 self.exp_fun(logs[self.metric_name])
-#                 if (self.type == 'min' and self.exp_fun.avg < self.reaching_goal) or \
-#                     (self.type == 'max' and self.exp_fun.avg > self.reaching_goal):
-#                     print(f"Action triggered: {self.string}")
-#                     self.triggered_action(logs, self)
-#                     print(f"Action Triggered: {self.string}")
-#
 
 class TriggerActionWithPatience(Callback):
     def __init__(self, mode='min', min_delta=0, patience=10, min_delta_is_percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100, triggered_action=None, action_name='', alpha=1, weblogger=False, verbose=False):
@@ -430,6 +268,18 @@ class TriggerActionWithPatience(Callback):
                         best * min_delta / 100)
 
 
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+class PlateauLossLrScheduler(Callback):
+    def __init__(self, optimizer, patience=2):
+        self.scheduler = ReduceLROnPlateau(optimizer, patience=patience)
+        self.last_lr = [i['lr'] for i in self.scheduler.optimizer.param_groups]
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.scheduler.step(logs['loss'])
+        if self.last_lr != [i['lr'] for i in self.scheduler.optimizer.param_groups]:
+            print((fg.blue + "learning rate: {} => {}" + rs.fg).format(self.last_lr, [i['lr'] for i in self.scheduler.optimizer.param_groups]))
+            self.last_lr = [i['lr'] for i in self.scheduler.optimizer.param_groups]
+
 class CallLrScheduler(Callback):
     def __init__(self, scheduler, step_epoch=True, step_batch=False):
         self.scheduler = scheduler
@@ -440,10 +290,9 @@ class CallLrScheduler(Callback):
     def step(self):
         lr = self.scheduler.get_last_lr()
         self.scheduler.step()
-        if self.last_lr !=  [i['lr'] for i in self.scheduler.optimizer.param_groups]:
-            print("learning rate: {} => {}".format(self.last_lr, [i['lr'] for i in self.scheduler.optimizer.param_groups]))
+        if self.last_lr != [i['lr'] for i in self.scheduler.optimizer.param_groups]:
+            print((fg.blue + "learning rate: {} => {}" + rs.fg).format(self.last_lr, [i['lr'] for i in self.scheduler.optimizer.param_groups]))
             self.last_lr = [i['lr'] for i in self.scheduler.optimizer.param_groups]
-
 
     def on_batch_end(self, batch, logs=None):
         if self.step_batch:
@@ -475,37 +324,90 @@ class StopWhenMetricIs(Callback):
             self.check_and_stop(logs)
 
 class SaveModel(Callback):
-    def __init__(self, net, output_path, log_in_weblogger=False):
+    def __init__(self, net, output_path, log_in_weblogger=False, epsilon_loss=0.1, min_iter=100):
         self.output_path = output_path
         self.net = net
         self.log_in_weblogger = log_in_weblogger
+        self.last_loss = np.inf
+        self.last_iter = 0
+        self.min_iter = min_iter
+        self.epsilone_loss = epsilon_loss
         super().__init__()
+
+    def save_model(self, path):
+        pathlib.Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
+        print(fg.yellow + ef.inverse + 'Saving model in {}'.format(path) + rs.fg + rs.inverse)
+        torch.save(self.net.state_dict(), path)
+
+    def on_batch_end(self, batch, logs=None):
+        if self.output_path is not None:
+            if ((self.last_loss - logs['loss']) > self.epsilone_loss) and ((logs['tot_iter'] - self.last_iter) > self.min_iter):
+                self.last_iter = logs['tot_iter']
+                self.last_loss = logs['loss']
+                self.save_model(os.path.splitext(self.output_path)[0] + f'_checkpoint' + os.path.splitext(self.output_path)[1])
 
     def on_train_end(self, logs=None):
         if self.output_path is not None:
-            pathlib.Path(os.path.dirname(self.output_path)).mkdir(parents=True, exist_ok=True)
-            print('Saving model in {}'.format(self.output_path))
-            torch.save(self.net.state_dict(), self.output_path)
-            # neptune.log_artifact(self.output_path, self.output_path) if self.log_in_neptune else None
+            self.save_model(self.output_path)
 
 
-class Metrics(Callback):
-    def __init__(self, use_cuda, log_every, log_text=''):
+
+class AccuracyMetrics(Callback):
+    def __init__(self, use_cuda, log_every, log_text='', pred_str='y_pred', true_str='y_true'):
         self.use_cuda = use_cuda
         self.log_every = log_every
+        self.pred_str = pred_str
+        self.true_str = true_str
         self.log_text = log_text
         self.correct_train, self.total_samples = 0, 0
         super().__init__()
 
     def update_classic_logs(self, batch_logs):
-        self.correct_train += ((batch_logs['y_pred'].cuda() if self.use_cuda else batch_logs['y_pred']) ==
-                                (batch_logs['y_true'].cuda() if self.use_cuda else batch_logs['y_true'])).sum().item()
-        self.total_samples += batch_logs['y_true'].size(0)
+        self.correct_train += ((batch_logs[self.pred_str].cuda() if self.use_cuda else batch_logs[self.pred_str]) ==
+                               (batch_logs[self.true_str].cuda() if self.use_cuda else batch_logs[self.true_str])).sum().item()
+        self.total_samples += batch_logs[self.true_str].size(0)
+
+from abc import ABC
+class PrintLogs(Callback, ABC):
+    def __init__(self, id, plot_every=100, type_print='mean'):
+        self.id = id
+        self.running_logs = {}
+        self.last_iter = 0
+        self.plot_every = plot_every
+        self.type_print = type_print
+
+    def on_training_step_end(self, batch, logs=None):
+        if self.id in logs:
+            for k, v in logs[self.id].items():
+                id_str = f'{self.id}/{k}'
+                if id_str not in self.running_logs:
+                    self.running_logs[id_str] = []
+                self.running_logs[id_str].append(v)
 
 
-class RunningMetrics(Metrics):
-    def __init__(self, use_cuda, log_every, log_text=''):
-        super().__init__(use_cuda, log_every, log_text)
+            if logs['tot_iter'] - self.last_iter > self.plot_every:
+                for k, v in logs[self.id].items():
+                    id_str = f'{self.id}/{k}'
+                    self.print_logs(self.running_logs[id_str], id_str)
+                self.last_iter = logs['tot_iter']
+
+
+class PrintLogsNeptune(PrintLogs):
+    def __init__(self, weblogger, plot_every=100, type_print='mean'):
+        self.weblogger = weblogger
+        super().__init__('neptune', plot_every=plot_every, type_print=type_print)
+
+    def print_logs(self, values, id_str):
+        if self.type_print == 'mean':
+            v = np.mean(values)
+        elif self.type_print == 'max':
+            v = np.max(values)
+        self.weblogger[id_str.strip(f"{self.id}/")].log(v)
+
+
+class RunningAccuracyMetrics(AccuracyMetrics):
+    def __init__(self, use_cuda, log_every, log_text='', **kwargs):
+        super().__init__(use_cuda, log_every, log_text, **kwargs)
         self.running_loss = 0
         self.init_classic_logs()
 
@@ -521,24 +423,39 @@ class RunningMetrics(Metrics):
     def init_classic_logs(self):
         self.correct_train, self.total_samples, self.running_loss = 0, 0, 0
 
-class AverageChangeMetric(RunningMetrics):
-    old_metric = None
-    num_iter  = 0
-    def __init__(self, loss_or_acc='loss', **kwargs):
-        self.loss_or_acc = loss_or_acc
+
+class StandardMetrics(RunningAccuracyMetrics):
+    num_iter = 0
+    time = None
+
+    def __init__(self, print_it=True, metrics_prefix='', weblogger=False, size_dataset=None, **kwargs):
+        self.weblogger = weblogger
+        self.print_it = print_it
+        self.metrics_prefix = metrics_prefix
+        self.size_dataset = size_dataset
         super().__init__(**kwargs)
 
-    def on_training_step_end(self, batch_index, logs=None):
-        num_iter += 1
-        self.update_classic_logs(logs)
-        if logs['tot_iter'] % self.log_every == 0:
-            metric = self.compute_mean_loss_acc(num_iter=self.num_iter)[0 if self.loss_or_acc == 'loss' else 1]
-            self.num_iter = 0
-            if self.old_metric is not None:
-                logs[{self.log_text}] = metric - self.old_metric
-            self.old_metric = metric
+    def on_train_begin(self, logs=None):
+        self.time = time.time()
 
+    def on_training_step_end(self, batch_index, batch_logs=None):
+        self.num_iter += 1
+        self.update_classic_logs(batch_logs)
+        if batch_logs['tot_iter'] % self.log_every == 0:
+            batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc(num_iter=self.num_iter)
+            self.num_iter = 0
+            if self.print_it:
+                framework_utils.progress_bar(batch_index, self.size_dataset, msg=('loss: {:.4f}, acc: ' + bg.white + fg.black+ '{:.4f}%' + rs.fg+rs.bg).format(batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
+                # print(('[iter{}, {:.2f}sec] loss: {:.4f}, train_acc: ' + bg.white + fg.black+ '{:.4f}%' + rs.fg+rs.bg).format(batch_logs['tot_iter'], time.time()- self.time, batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
+
+                self.time = time.time()
+            metric2 = f'accuracy {self.log_text}'
+            metric1 = 'loss'
+            if isinstance(self.weblogger, neptune.run.Run):
+                self.weblogger[metric1].log(batch_logs[f'{self.metrics_prefix}/mean_loss'])
+                self.weblogger[metric2].log(batch_logs[f'{self.metrics_prefix}/mean_acc'])
             self.init_classic_logs()
+
 
 class DuringTrainingTest(Callback):
     test_time = 0
@@ -565,18 +482,24 @@ class DuringTrainingTest(Callback):
     def get_callbacks(self, log=''):
         return [
             StopWhenMetricIs(value_to_reach=100, metric_name='tot_iter', check_after_batch=True),
-                StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
-                TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                    weblogger=self.weblogger, log_text=self.log_text + log)]
-    def run_tests(self, logs):
+            StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
+            TotalAccuracyMetric(use_cuda=self.use_cuda,
+                                weblogger=self.weblogger, log_text=self.log_text + log)]
+
+    def run_tests(self, logs, last_test=False):
         start_test_time = time.time()
         print(fg.green, end="")
         print(f"################ TEST DURING TRAIN - NUM {self.num_tests} ################")
         print(rs.fg, end="")
 
-        def test(testing_loader, log=''):
+        def test(testing_loader, log='', last_test=False):
             print(f"Testing " + fg.green + f"[{testing_loader.dataset.name_generator}]" + rs.fg)
             mid_test_cb = self.get_callbacks(log)
+            if last_test:
+                mid_test_cb += [ComputeConfMatrix(num_classes=len(testing_loader.dataset.classes),
+                                                  weblogger=self.weblogger,
+                                                  weblog_text='ConfMatrix',
+                                                  class_names=testing_loader.dataset.classes)]
 
             with torch.no_grad():
                 _, logs = self.call_run(testing_loader,
@@ -587,12 +510,12 @@ class DuringTrainingTest(Callback):
         print("TEST IN EVAL MODE")
         self.model.eval()
         for testing_loader in self.testing_loaders:
-            test(testing_loader, log=f' EVALmode [{testing_loader.dataset.name_generator}]')
+            test(testing_loader, log=f' EVALmode [{testing_loader.dataset.name_generator}]', last_test=last_test)
 
         self.model.train()
         print("TEST IN TRAIN MODE")
         for testing_loader in self.testing_loaders:
-            test(testing_loader, log=f' TRAINmode [{testing_loader.dataset.name_generator}]')
+            test(testing_loader, log=f' TRAINmode [{testing_loader.dataset.name_generator}]', last_test=last_test)
 
         self.num_tests += 1
 
@@ -600,10 +523,10 @@ class DuringTrainingTest(Callback):
         self.test_time = time.time() - start_test_time
         if self.auto_increase and 'tot_iter' in logs:
             self.every_x_sec = self.test_time + 0.5 * self.test_time * math.log(logs['tot_iter']+1, 1.2)
-            print("Test time is {:.4f} , next test is gonna happen in {:.4f}".format(self.test_time, self.every_x_sec))
+            print("Test time is {:.4f}s, next test is gonna happen in {:.4f}s".format(self.test_time, self.every_x_sec))
 
         if self.multiple_sec_of_test_time:
-            print("Test time is {:.4f} , next test is gonna happen in {:.4f}".format(self.test_time, self.test_time*self.multiple_sec_of_test_time))
+            print("Test time is {:.4f}s, next test is gonna happen in {:.4f}s".format(self.test_time, self.test_time*self.multiple_sec_of_test_time))
         print(fg.green, end="")
         print("#############################################")
         print(rs.fg, end="")
@@ -615,8 +538,8 @@ class DuringTrainingTest(Callback):
 
     def on_batch_end(self, batch, logs=None):
         if (self.every_x_iter is not None and logs['tot_iter'] % self.every_x_iter) or \
-           (self.every_x_sec is not None and self.every_x_sec < time.time() - self.time_from_last_test) or \
-           (self.multiple_sec_of_test_time is not None and time.time() - self.time_from_last_test > self.multiple_sec_of_test_time * self.test_time):
+                (self.every_x_sec is not None and self.every_x_sec < time.time() - self.time_from_last_test) or \
+                (self.multiple_sec_of_test_time is not None and time.time() - self.time_from_last_test > self.multiple_sec_of_test_time * self.test_time):
             if (self.every_x_iter is not None and logs['tot_iter'] % self.every_x_iter):
                 print(f"\nTest every {self.every_x_iter} iterations")
             if (self.every_x_sec is not None and self.every_x_sec < time.time() - self.time_from_last_test):
@@ -628,7 +551,7 @@ class DuringTrainingTest(Callback):
 
     def on_train_end(self, logs=None):
         print("End training")
-        self.run_tests(logs)
+        self.run_tests(logs, last_test=True)
 
 
 class EndEpochStats(Callback):
@@ -645,44 +568,10 @@ class EndEpochStats(Callback):
         print("End epoch. Tot iter: [{}] - in [{:.4f}] seconds - tot [{:.4f}] seconds\n".format(logs['tot_iter'], time.time() - self.timer_epoch, time.time() - self.timer_train))
         print(rs.fg, end="")
 
-class StandardMetrics(RunningMetrics):
-    num_iter = 0
-    time = None
 
-    def __init__(self, print_it=True, metrics_prefix='', weblogger=False, **kwargs):
-        self.weblogger = weblogger
-        self.print_it = print_it
-        self.metrics_prefix = metrics_prefix
-        super().__init__(**kwargs)
-
-    def on_train_begin(self, logs=None):
-        self.time = time.time()
-
-    def on_training_step_end(self, batch_index, batch_logs=None):
-        self.num_iter += 1
-        self.update_classic_logs(batch_logs)
-        if batch_logs['tot_iter'] % self.log_every == 0:
-            batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc(num_iter=self.num_iter)
-            self.num_iter = 0
-            if self.print_it:
-                print(('[iter{}, {:.2f}sec] loss: {:.4f}, train_acc: ' + bg.white + fg.black+ '{:.4f}%' + rs.fg+rs.bg).format(batch_logs['tot_iter'], time.time()- self.time, batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
-                self.time = time.time()
-            metric1 = 'Metric/{}/ Mean Running Loss '.format(self.log_text)
-            # metric2 = 'Metric/{}/ Mean Train Accuracy train'.format(self.log_text)
-            metric2 = 'accuracy'
-            metric1 = 'loss'
-            if self.weblogger == 1:
-                wandb.log({metric1: batch_logs[f'{self.metrics_prefix}/mean_loss'],
-                           metric2: batch_logs[f'{self.metrics_prefix}/mean_acc']})
-            if isinstance(self.weblogger, neptune.run.Run):
-                self.weblogger[metric1].log(batch_logs[f'{self.metrics_prefix}/mean_loss'])
-                self.weblogger[metric2].log(batch_logs[f'{self.metrics_prefix}/mean_acc'])
-            self.init_classic_logs()
-
-
-class TotalAccuracyMetric(Metrics):
-    def __init__(self, use_cuda, weblogger=True, log_text=''):
-        super().__init__(use_cuda, log_every=None, log_text=log_text)
+class TotalAccuracyMetric(AccuracyMetrics):
+    def __init__(self, use_cuda, weblogger=True, log_text='', **kwargs):
+        super().__init__(use_cuda, log_every=None, log_text=log_text, **kwargs)
         self.weblogger = weblogger
         self.start = time.time()
 
@@ -695,8 +584,7 @@ class TotalAccuracyMetric(Metrics):
         print((fg.cyan + 'Total Accuracy for [{}] samples, [{}] iter, ' + ef.inverse + ef.bold + '[{}]' + rs.inverse + ': ' + ef.inverse  + '{:.4f}%'  + rs.inverse + rs.bold_dim + fg.cyan + ' - in {:.4f} seconds\n' + rs.fg).format(self.total_samples, logs["tot_iter"], self.log_text, logs["total_accuracy"], time.time() - self.start))
 
         metric_str = 'Metric/{} Acc'.format(self.log_text)
-        if self.weblogger == 1:
-            wandb.log({metric_str: logs['total_accuracy']})
+
         if isinstance(self.weblogger, neptune.run.Run):
             self.weblogger[metric_str].log(logs['total_accuracy'])
 
@@ -919,7 +807,7 @@ class SequenceLearning3dDataFrameSaver(GenericDataFrameSaver):
         camera_positions_candidates = self.camera_positions_batch[sample_index][:self.nFc * self.nSc].reshape(self.nSc, self.nFc, 3)
         camera_positions_trainings = self.camera_positions_batch[sample_index][self.nFc * self.nSc:].reshape(self.nSt, self.nFt, 3)
 
-#################################~~~~~~DEBUG~~~~~~###############################################
+        #################################~~~~~~DEBUG~~~~~~###############################################
         # _, self.ax = framework_utils.create_sphere()
         #
         # import matplotlib.pyplot as plt
@@ -939,7 +827,7 @@ class SequenceLearning3dDataFrameSaver(GenericDataFrameSaver):
         #     for i in range(len(self.camera_positions_batch[0]) - 1):
         #         vh2.append(framework_utils.add_norm_vector(unity2python(c[i + 1]), 'r', ax=self.ax))
         #         vh1.append(framework_utils.add_norm_vector(unity2python(c[0]), 'k', ax=self.ax))
-#################################################################
+        #################################################################
         add_logs = [self.task_num,
                     logs['labels'][sample_index][0].item(), logs['labels'][sample_index][1].item(),
                     np.array([unity2python(i) for i in camera_positions_candidates]), np.array([unity2python(i) for i in camera_positions_trainings]),
@@ -987,11 +875,11 @@ class TranslationDataFrameSaver(GenericDataFrameSaver):
         self.rotation_batch = np.array([np.array(i) for i in rotation_batch_t]).transpose()
 
         additional_logs = [self.face_center_batch[sample_index][0],
-                self.face_center_batch[sample_index][1],
-                self.size_object_batch[sample_index][0],
-                self.size_object_batch[sample_index][1],
-                self.rotation_batch[sample_index],
-                self.translation_type_str]
+                           self.face_center_batch[sample_index][1],
+                           self.size_object_batch[sample_index][0],
+                           self.size_object_batch[sample_index][1],
+                           self.rotation_batch[sample_index],
+                           self.translation_type_str]
         return additional_logs
 
     def _compute_and_log_metrics(self, data_frame):
