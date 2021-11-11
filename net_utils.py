@@ -94,7 +94,7 @@ def get_test_callbacks(config, log_text, testing_loader):
                         weblogger=0, log_text=log_text,
                         metrics_prefix='cnsl',
                         size_dataset=len(testing_loader)),
-        PlotTimeElapsed(time_every=3000),
+        PlotIterationsInfo(time_every=3000),
         ComputeConfMatrix(num_classes=testing_loader.dataset.num_classes,
                           weblogger=config.weblogger,
                           weblog_text=log_text,
@@ -124,7 +124,7 @@ def get_train_callbacks(net, config, log_text, train_loader, test_loaders=None, 
                         size_dataset=len(train_loader)),
 
         StopFromUserInput(),
-        PlotTimeElapsed(time_every=100),
+        PlotIterationsInfo(time_every=100),
         TotalAccuracyMetric(use_cuda=config.use_cuda,
                             weblogger=None, log_text=log_text),
         SaveModel(net=net, output_path=config.model_output_filename, min_iter=500)]
@@ -171,6 +171,6 @@ def get_train_callbacks(net, config, log_text, train_loader, test_loaders=None, 
                                    use_cuda=config.use_cuda,
                                    weblogger=config.weblogger, log_text=log_text,
                                    metrics_prefix='webl'),
-                   PrintLogsNeptune(config.weblogger, plot_every=config.weblog_check_every)]
+                   PrintNeptune(config.weblogger, plot_every=config.weblog_check_every)]
     #                PlotGradientWeblog(net=self.net, log_every=50, plot_every=500, log_txt=log_text, weblogger=self.weblogger)]
     return all_cb

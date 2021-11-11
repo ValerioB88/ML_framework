@@ -30,14 +30,99 @@ pd.set_option("display.max_rows", None, "display.max_columns", None)
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+class Logs():
+    value = None
 
-class ExpMovingAverage():
-    def __init__(self, start, alpha=0.5):
-        self.avg = start
+    def __repl__(self):
+        return str(self.value)
+
+    def __str__(self):
+        return str(self.value)
+
+    def __copy__(self):
+        return self.value
+
+    def __deepcopy__(self, memodict={}):
+        return self.value
+
+    def __eq__(self, other):
+        return self.value == other
+
+    def __add__(self, other):
+        return self.value + other
+
+    def __sub__(self, other):
+        return self.value - other
+
+    def __radd__(self, other):
+        return other + self.value
+
+    def __rsub__(self, other):
+        return other - self.value
+
+    def __rfloordiv__(self, other):
+        return other // self.value
+
+    def __rtruediv__(self, other):
+        return other / self.value
+
+    def __mul__(self, other):
+        return self.value * other
+
+    def __floordiv__(self, other):
+        return self.value // other
+
+    def __truediv__(self, other):
+        return self.value / other
+
+    def __gt__(self, other):
+        return self.value > other
+
+    def __lt__(self, other):
+        return self.value < other
+
+    def __int__(self):
+        return int(self.value)
+
+    def __ge__(self, other):
+        return self.value >= other
+
+    def __le__(self, other):
+        return self.value <= other
+
+    def __float__(self):
+        return float(self.value)
+
+    def __pow__(self, power, modulo=None):
+        return self.value ** power
+
+    def __format__(self, format_spec):
+        return format(self.value, format_spec)
+
+class ExpMovingAverage(Logs):
+    value = None
+    def __init__(self, alpha=0.5):
         self.alpha = alpha
 
-    def __call__(self, *args, **kwargs):
-        self.avg = self.alpha * args[0] + (1 - self.alpha) * self.avg
+    def add(self, *args):
+        if self.value is None:
+            self.value = args[0]
+        else:
+            self.value = self.alpha * args[0] + (1 -    self.alpha) * self.value
+        return self
+
+
+class CumulativeAverage(Logs):
+    value = None
+    n = 0
+
+    def add(self, *args):
+        if self.value is None:
+            self.value = args[0]
+
+        else:
+            self.value = (args[0] + self.n*self.value) / (self.n+1)
+        self.n += 1
         return self
 
 

@@ -178,8 +178,13 @@ def relation_net_step(data, model, loss_fn, optimizer, use_cuda, loader, train, 
         optimizer.step()
     return loss, queries_real_labels, prediction_real_labels, logs
 
+from collections import deque
 
-def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, **kwargs):
+def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=None, loss_fn=None, iteration_step=standard_net_step, logs=None, **kwargs):
+    if logs is None:
+        logs = {}
+    # logs.update({'tot_iter': deque(maxlen=1),
+    #             'epoch': deque(maxlen=1)})
     torch.cuda.empty_cache()
 
     make_cuda(net, use_cuda)
@@ -189,7 +194,6 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
     callbacks.set_optimizer(optimizer)
     callbacks.set_loss_fn(loss_fn)
 
-    logs = {}
     callbacks.on_train_begin()
 
     tot_iter = 0
@@ -203,8 +207,13 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
 
             callbacks.on_batch_begin(batch_index, logs)
 
-            loss, y_true, y_pred, new_batch_logs = iteration_step(data, net, loss_fn, optimizer, use_cuda, **kwargs)
-            logs.update({'y_pred': y_pred, 'loss': loss.item(), 'y_true': y_true, 'tot_iter': tot_iter, 'stop': False, **new_batch_logs})
+            loss, y_true, y_pred, logs = iteration_step(data, net, loss_fn, optimizer, use_cuda, logs, **kwargs)
+            logs.update({
+                # 'y_pred': y_pred,
+                'loss': loss.item(),
+                # 'y_true': y_true,
+                'tot_iter': tot_iter,
+                'stop': False})
 
             callbacks.on_training_step_end(batch_index, logs)
             callbacks.on_batch_end(batch_index, logs)

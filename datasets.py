@@ -22,7 +22,7 @@ class MyImageFolder(ImageFolder):
 
     def __init__(self, name_classes=None, verbose=True, *args, **kwargs):
         print(fg.red + ef.inverse + "ROOT:  " + kwargs['root'] + rs.inverse + rs.fg)
-        self.name_classes = np.sort(name_classes)
+        self.name_classes = np.sort(name_classes) if name_classes is not None else None
         self.verbose = verbose
         super().__init__(*args, **kwargs)
 

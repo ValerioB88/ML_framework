@@ -2,17 +2,9 @@
 Ports of Callback classes from the Keras library.
 """
 import seaborn as sn
-from sty import fg, bg, rs, ef
-from tqdm import tqdm
+from sty import fg, rs, ef
+from abc import ABC
 import numpy as np
-from neptune.new.types import File
-import torch
-from collections import OrderedDict, Iterable
-import warnings
-import os
-import copy
-import csv
-import io
 import neptune.new as neptune
 import framework_utils
 import pathlib
@@ -25,6 +17,8 @@ import signal, os
 # from neptunecontrib.api import log_chart
 import time
 import math
+
+
 class CallbackList(object):
     """Container abstracting a list of callbacks.
 
@@ -175,11 +169,52 @@ class StopFromUserInput(Callback):
             logs['stop'] = True
             print('Stopping from user input')
 
+class TriggerActionWhenReachingValue(Callback):
+    def __init__(self, value_to_reach, metric_name, mode='max', patience=1, check_after_batch=True, action=None, action_name='', check_every=1):
+        self.patience = patience
+        self.check_every = check_every
+        self.action = action
+        self.action_name = action_name
+        self.count_patience = 0
+        self.mode = mode
+        self.value_to_reach = value_to_reach
+        self.metric_name = metric_name
+        self.check_after_batch = check_after_batch
+        self.check_idx = 0
+        print(fg.green + f"Action [{self.action_name}] when [{self.metric_name}] has reached value {'higher' if self.mode == 'max' else 'lower'} than [{self.value_to_reach}] for {self.patience} checks (checked every {self.check_every} {'batches' if self.check_after_batch else 'epoches'})" + rs.fg)
+        super().__init__()
+
+    def compare(self, metric, value):
+        if self.mode == 'max':
+            return metric >= value
+        if self.mode == 'min':
+            return metric <= value
+
+    def check_and_stop(self, logs=None):
+        self.check_idx += 1
+        if self.check_idx >= self.check_every:
+            self.check_idx = 0
+            if self.compare(logs[self.metric_name], self.value_to_reach):
+                self.count_patience += 1
+                # print(f'PATIENCE +1 : {self.count_patience}/{self.patience}')
+                if self.count_patience >= self.patience:
+                    logs['stop'] = True
+                    print(fg.green + f"\nMetric [{self.metric_name}] has reached value {'higher' if self.mode == 'max' else 'lower'} than [{self.value_to_reach}]. Action [{self.action_name}] triggered" + rs.fg)
+            else:
+                self.count_patience = 0
+
+    def on_batch_end(self, batch, logs=None):
+        if self.check_after_batch:
+            self.check_and_stop(logs)
+
+    def on_epoch_end(self, epoch, logs=None):
+        if not self.check_after_batch:
+            self.check_and_stop(logs)
 
 class TriggerActionWithPatience(Callback):
     def __init__(self, mode='min', min_delta=0, patience=10, min_delta_is_percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100, triggered_action=None, action_name='', alpha=1, weblogger=False, verbose=False):
         super().__init__()
-        self.verbose=verbose
+        self.verbose = verbose
         self.triggered_action = triggered_action
         self.mode = mode  # mode refers to what are you trying to reach.
         self.check_every = check_every
@@ -217,7 +252,7 @@ class TriggerActionWithPatience(Callback):
             return
 
         if logs['tot_iter'] % self.check_every == 0:
-            metrics = self.exp_fun(logs[self.metric_name]).avg
+            metrics = self.exp_fun(logs[self.metric_name]).value
             print(f"Iter: {logs['tot_iter']}, Metric: {logs[self.metric_name]}, Exp Metric: {metrics}") if self.verbose else None
 
             if isinstance(self.weblogger, neptune.run.Run):
@@ -268,17 +303,38 @@ class TriggerActionWithPatience(Callback):
                         best * min_delta / 100)
 
 
+class ClipGradNorm(Callback):
+    def __init__(self, net, max_norm):
+        self.net = net
+        self.max_norm = max_norm
+
+    def on_training_step_end(self, batch, logs=None):
+        torch.nn.utils.clip_grad_norm(self.net.parameters(), self.max_norm)
+
+
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 class PlateauLossLrScheduler(Callback):
-    def __init__(self, optimizer, patience=2):
+    def __init__(self, optimizer, check_batch=False, patience=2, loss_metric='loss'):
+        self.loss_metric = loss_metric
         self.scheduler = ReduceLROnPlateau(optimizer, patience=patience)
         self.last_lr = [i['lr'] for i in self.scheduler.optimizer.param_groups]
+        self.check_batch = check_batch
 
     def on_epoch_end(self, epoch, logs=None):
-        self.scheduler.step(logs['loss'])
+        if not self.check_batch:
+            self.check_and_update(logs)
+
+
+    def check_and_update(self, logs):
+        self.scheduler.step(logs[self.loss_metric])
         if self.last_lr != [i['lr'] for i in self.scheduler.optimizer.param_groups]:
             print((fg.blue + "learning rate: {} => {}" + rs.fg).format(self.last_lr, [i['lr'] for i in self.scheduler.optimizer.param_groups]))
             self.last_lr = [i['lr'] for i in self.scheduler.optimizer.param_groups]
+
+    def on_batch_end(self, batch, logs):
+        if self.check_batch:
+            self.check_and_update(logs)
+
 
 class CallLrScheduler(Callback):
     def __init__(self, scheduler, step_epoch=True, step_batch=False):
@@ -324,7 +380,7 @@ class StopWhenMetricIs(Callback):
             self.check_and_stop(logs)
 
 class SaveModel(Callback):
-    def __init__(self, net, output_path, log_in_weblogger=False, epsilon_loss=0.1, min_iter=100):
+    def __init__(self, net, output_path, loss_metric_name='loss', log_in_weblogger=False, epsilon_loss=0.1, min_iter=100):
         self.output_path = output_path
         self.net = net
         self.log_in_weblogger = log_in_weblogger
@@ -332,6 +388,7 @@ class SaveModel(Callback):
         self.last_iter = 0
         self.min_iter = min_iter
         self.epsilone_loss = epsilon_loss
+        self.loss_metric_name = loss_metric_name
         super().__init__()
 
     def save_model(self, path):
@@ -341,9 +398,9 @@ class SaveModel(Callback):
 
     def on_batch_end(self, batch, logs=None):
         if self.output_path is not None:
-            if ((self.last_loss - logs['loss']) > self.epsilone_loss) and ((logs['tot_iter'] - self.last_iter) > self.min_iter):
+            if ((self.last_loss - logs[self.loss_metric_name]) > self.epsilone_loss) and ((logs['tot_iter'] - self.last_iter) > self.min_iter):
                 self.last_iter = logs['tot_iter']
-                self.last_loss = logs['loss']
+                self.last_loss = logs[self.loss_metric_name].value  ## ouch! You cannot reimpliement assignment operator!
                 self.save_model(os.path.splitext(self.output_path)[0] + f'_checkpoint' + os.path.splitext(self.output_path)[1])
 
     def on_train_end(self, logs=None):
@@ -351,110 +408,135 @@ class SaveModel(Callback):
             self.save_model(self.output_path)
 
 
+#
+# class AccuracyMetrics(Callback):
+#     def __init__(self, use_cuda, log_every, log_text='', pred_str='y_pred', true_str='y_true'):
+#         self.use_cuda = use_cuda
+#         self.log_every = log_every
+#         self.pred_str = pred_str
+#         self.true_str = true_str
+#         self.log_text = log_text
+#         self.correct_train, self.total_samples = 0, 0
+#         super().__init__()
+#
+#     def update_classic_logs(self, batch_logs):
+#
+#         self.correct_train += ((batch_logs[self.pred_str].cuda() if self.use_cuda else batch_logs[self.pred_str]) ==
+#                                (batch_logs[self.true_str].cuda() if self.use_cuda else batch_logs[self.true_str])).sum().item()
+#         self.total_samples += batch_logs[self.true_str].size(0)
 
-class AccuracyMetrics(Callback):
-    def __init__(self, use_cuda, log_every, log_text='', pred_str='y_pred', true_str='y_true'):
-        self.use_cuda = use_cuda
-        self.log_every = log_every
-        self.pred_str = pred_str
-        self.true_str = true_str
-        self.log_text = log_text
-        self.correct_train, self.total_samples = 0, 0
-        super().__init__()
-
-    def update_classic_logs(self, batch_logs):
-        self.correct_train += ((batch_logs[self.pred_str].cuda() if self.use_cuda else batch_logs[self.pred_str]) ==
-                               (batch_logs[self.true_str].cuda() if self.use_cuda else batch_logs[self.true_str])).sum().item()
-        self.total_samples += batch_logs[self.true_str].size(0)
-
-from abc import ABC
 class PrintLogs(Callback, ABC):
-    def __init__(self, id, plot_every=100, type_print='mean'):
+    def __init__(self, id, plot_every=100, plot_at_end=True):
         self.id = id
-        self.running_logs = {}
+        # self.running_logs = {}
         self.last_iter = 0
         self.plot_every = plot_every
-        self.type_print = type_print
+        self.plot_at_end = plot_at_end
 
     def on_training_step_end(self, batch, logs=None):
-        if self.id in logs:
-            for k, v in logs[self.id].items():
-                id_str = f'{self.id}/{k}'
-                if id_str not in self.running_logs:
-                    self.running_logs[id_str] = []
-                self.running_logs[id_str].append(v)
-
+        # if self.id in logs:
+        #     if self.id not in self.running_logs:
+        #         self.running_logs[self.id] = []
+        #     self.running_logs[self.id].append(logs[self.id])
 
             if logs['tot_iter'] - self.last_iter > self.plot_every:
-                for k, v in logs[self.id].items():
-                    id_str = f'{self.id}/{k}'
-                    self.print_logs(self.running_logs[id_str], id_str)
+                # self.print_logs(self.get_value(self.running_logs[self.id]), logs)
+                self.print_logs(logs[self.id], logs)
+                # self.running_logs[self.id] = []
                 self.last_iter = logs['tot_iter']
 
-
-class PrintLogsNeptune(PrintLogs):
-    def __init__(self, weblogger, plot_every=100, type_print='mean'):
-        self.weblogger = weblogger
-        super().__init__('neptune', plot_every=plot_every, type_print=type_print)
-
-    def print_logs(self, values, id_str):
-        if self.type_print == 'mean':
-            v = np.mean(values)
-        elif self.type_print == 'max':
-            v = np.max(values)
-        self.weblogger[id_str.strip(f"{self.id}/")].log(v)
+    def on_train_end(self, logs=None):
+        if self.plot_at_end:
+            self.print_logs(logs[self.id], logs)
 
 
-class RunningAccuracyMetrics(AccuracyMetrics):
-    def __init__(self, use_cuda, log_every, log_text='', **kwargs):
-        super().__init__(use_cuda, log_every, log_text, **kwargs)
-        self.running_loss = 0
-        self.init_classic_logs()
 
-    def update_classic_logs(self, batch_logs):
-        super().update_classic_logs(batch_logs)
-        self.running_loss += batch_logs['loss']
-
-    def compute_mean_loss_acc(self, num_iter):
-        mean_loss = self.running_loss / num_iter
-        mean_acc = 100 * self.correct_train / self.total_samples
-        return mean_loss, mean_acc
-
-    def init_classic_logs(self):
-        self.correct_train, self.total_samples, self.running_loss = 0, 0, 0
-
-
-class StandardMetrics(RunningAccuracyMetrics):
-    num_iter = 0
-    time = None
-
-    def __init__(self, print_it=True, metrics_prefix='', weblogger=False, size_dataset=None, **kwargs):
-        self.weblogger = weblogger
-        self.print_it = print_it
-        self.metrics_prefix = metrics_prefix
-        self.size_dataset = size_dataset
+class PrintConsole(PrintLogs):
+    def __init__(self, endln="\n", **kwargs):
+        self.endln = endln
         super().__init__(**kwargs)
 
-    def on_train_begin(self, logs=None):
-        self.time = time.time()
+    def print_logs(self, values, logs):
+        if values is str:
+            value_format = values
+        else:
+            value_format = f'{values:.3}'
+        print(fg.cyan + f'{self.id}: {value_format}' + rs.fg, end=self.endln)
+
+
+
+
+class PrintNeptune(PrintLogs):
+    def __init__(self,  weblogger, convert_str=False, **kwargs):
+        self.convert_str = convert_str
+        self.weblogger = weblogger
+        super().__init__(**kwargs)
+
+    def print_logs(self, values, logs):
+        if isinstance(self.weblogger,  neptune.run.Run):
+            if self.convert_str:
+                self.weblogger[self.id].log(str(values))
+            else:
+                self.weblogger[self.id].log(values)
+
+
+# class RunningAccuracyMetrics(AccuracyMetrics):
+#     def __init__(self, use_cuda, log_every, log_text='', **kwargs):
+#         super().__init__(use_cuda, log_every, log_text, **kwargs)
+#         self.running_loss = 0
+#         self.init_classic_logs()
+#
+#     def update_classic_logs(self, batch_logs):
+#         super().update_classic_logs(batch_logs)
+#         self.running_loss += batch_logs['loss']
+#
+#     def compute_mean_loss_acc(self, num_iter):
+#         mean_loss = self.running_loss / num_iter
+#         mean_acc = 100 * self.correct_train / self.total_samples
+#         return mean_loss, mean_acc
+#
+#     def init_classic_logs(self):
+#         self.correct_train, self.total_samples, self.running_loss = 0, 0, 0
+
+class ProgressBar(Callback):
+    def __init__(self, l):
+        self.length_bar = l
 
     def on_training_step_end(self, batch_index, batch_logs=None):
-        self.num_iter += 1
-        self.update_classic_logs(batch_logs)
-        if batch_logs['tot_iter'] % self.log_every == 0:
-            batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc(num_iter=self.num_iter)
-            self.num_iter = 0
-            if self.print_it:
-                framework_utils.progress_bar(batch_index, self.size_dataset, msg=('loss: {:.4f}, acc: ' + bg.white + fg.black+ '{:.4f}%' + rs.fg+rs.bg).format(batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
-                # print(('[iter{}, {:.2f}sec] loss: {:.4f}, train_acc: ' + bg.white + fg.black+ '{:.4f}%' + rs.fg+rs.bg).format(batch_logs['tot_iter'], time.time()- self.time, batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
+        framework_utils.progress_bar(batch_index, self.length_bar)
 
-                self.time = time.time()
-            metric2 = f'accuracy {self.log_text}'
-            metric1 = 'loss'
-            if isinstance(self.weblogger, neptune.run.Run):
-                self.weblogger[metric1].log(batch_logs[f'{self.metrics_prefix}/mean_loss'])
-                self.weblogger[metric2].log(batch_logs[f'{self.metrics_prefix}/mean_acc'])
-            self.init_classic_logs()
+#
+# class StandardMetrics(RunningAccuracyMetrics):
+#     num_iter = 0
+#     time = None
+#
+#     def __init__(self, print_it=True, metrics_prefix='', weblogger=False, size_dataset=None, **kwargs):
+#         self.weblogger = weblogger
+#         self.print_it = print_it
+#         self.metrics_prefix = metrics_prefix
+#         self.size_dataset = size_dataset
+#         super().__init__(**kwargs)
+#
+#     def on_train_begin(self, logs=None):
+#         self.time = time.time()
+#
+#     def on_training_step_end(self, batch_index, batch_logs=None):
+#         self.num_iter += 1
+#         self.update_classic_logs(batch_logs)
+#         if batch_logs['tot_iter'] % self.log_every == 0:
+#             batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc(num_iter=self.num_iter)
+#             self.num_iter = 0
+#             if self.print_it:
+#                 framework_utils.progress_bar(batch_index, self.size_dataset, msg=('loss: {:.4f}, acc: ' + bg.white + fg.black+ '{:.4f}%' + rs.fg+rs.bg).format(batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
+#                 # print(('[iter{}, {:.2f}sec] loss: {:.4f}, train_acc: ' + bg.white + fg.black+ '{:.4f}%' + rs.fg+rs.bg).format(batch_logs['tot_iter'], time.time()- self.time, batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
+#
+#                 self.time = time.time()
+#             metric2 = f'accuracy {self.log_text}'
+#             metric1 = 'loss'
+#             if isinstance(self.weblogger, neptune.run.Run):
+#                 self.weblogger[metric1].log(batch_logs[f'{self.metrics_prefix}/mean_loss'])
+#                 self.weblogger[metric2].log(batch_logs[f'{self.metrics_prefix}/mean_acc'])
+#             self.init_classic_logs()
 
 
 class DuringTrainingTest(Callback):
@@ -568,25 +650,25 @@ class EndEpochStats(Callback):
         print("End epoch. Tot iter: [{}] - in [{:.4f}] seconds - tot [{:.4f}] seconds\n".format(logs['tot_iter'], time.time() - self.timer_epoch, time.time() - self.timer_train))
         print(rs.fg, end="")
 
-
-class TotalAccuracyMetric(AccuracyMetrics):
-    def __init__(self, use_cuda, weblogger=True, log_text='', **kwargs):
-        super().__init__(use_cuda, log_every=None, log_text=log_text, **kwargs)
-        self.weblogger = weblogger
-        self.start = time.time()
-
-    def on_training_step_end(self, batch_index, batch_logs=None):
-        super().on_training_step_end(batch_index, batch_logs)
-        self.update_classic_logs(batch_logs)
-
-    def on_train_end(self, logs=None):
-        logs['total_accuracy'] = 100.0 * self.correct_train / self.total_samples
-        print((fg.cyan + 'Total Accuracy for [{}] samples, [{}] iter, ' + ef.inverse + ef.bold + '[{}]' + rs.inverse + ': ' + ef.inverse  + '{:.4f}%'  + rs.inverse + rs.bold_dim + fg.cyan + ' - in {:.4f} seconds\n' + rs.fg).format(self.total_samples, logs["tot_iter"], self.log_text, logs["total_accuracy"], time.time() - self.start))
-
-        metric_str = 'Metric/{} Acc'.format(self.log_text)
-
-        if isinstance(self.weblogger, neptune.run.Run):
-            self.weblogger[metric_str].log(logs['total_accuracy'])
+#
+# class TotalAccuracyMetric(AccuracyMetrics):
+#     def __init__(self, use_cuda, weblogger=True, log_text='', **kwargs):
+#         super().__init__(use_cuda, log_every=None, log_text=log_text, **kwargs)
+#         self.weblogger = weblogger
+#         self.start = time.time()
+#
+#     def on_training_step_end(self, batch_index, batch_logs=None):
+#         super().on_training_step_end(batch_index, batch_logs)
+#         self.update_classic_logs(batch_logs)
+#
+#     def on_train_end(self, logs=None):
+#         logs['total_accuracy'] = 100.0 * self.correct_train / self.total_samples
+#         print((fg.cyan + 'Total Accuracy for [{}] samples, [{}] iter, ' + ef.inverse + ef.bold + '[{}]' + rs.inverse + ': ' + ef.inverse  + '{:.4f}%'  + rs.inverse + rs.bold_dim + fg.cyan + ' - in {:.4f} seconds\n' + rs.fg).format(self.total_samples, logs["tot_iter"], self.log_text, logs["total_accuracy"], time.time() - self.start))
+#
+#         metric_str = 'Metric/{} Acc'.format(self.log_text)
+#
+#         if isinstance(self.weblogger, neptune.run.Run):
+#             self.weblogger[metric_str].log(logs['total_accuracy'])
 
 class ComputeConfMatrix(Callback):
     def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text='', class_names=None):
@@ -612,11 +694,11 @@ class ComputeConfMatrix(Callback):
         self.num_iter += 1
 
     def on_train_end(self, logs=None):
-        logs['conf_mat_acc'] = (self.confusion_matrix / self.confusion_matrix.sum(1)[:, None]).numpy()
+        conf_mat_acc = (self.confusion_matrix / self.confusion_matrix.sum(1)[:, None]).numpy()
 
         if self.weblogger:
             figure = plt.figure(figsize=(20, 15))
-            sn.heatmap(logs['conf_mat_acc'], annot=True, fmt=".2f", xticklabels=self.class_names, yticklabels=self.class_names, annot_kws={"size": 15}, vmin=0, vmax=1)  # font size
+            sn.heatmap(conf_mat_acc, annot=True, fmt=".2f", xticklabels=self.class_names, yticklabels=self.class_names, annot_kws={"size": 15}, vmin=0, vmax=1)  # font size
             plt.yticks(np.arange(len(self.class_names)) + 0.5, self.class_names, rotation=0, fontsize="10", va="center")
             plt.ylabel('truth')
             plt.xlabel('predicted')
@@ -655,18 +737,19 @@ class RollingAccEachClassWeblog(Callback):
                         self.weblogger[metric_str].log(cc * 100 if not np.isnan(cc) else -1)
 
 
-class PlotTimeElapsed(Callback):
-    def __init__(self, time_every=100):
+class PlotIterationsInfo(Callback):
+    def __init__(self, time_every=100, endl=""):
         super().__init__()
         self.time_every = time_every
         self.start_time = 0
+        self.endl = endl
 
     def on_train_begin(self, logs=None):
         self.start_time = time.time()
 
     def on_batch_end(self, batch, logs=None):
         if logs['tot_iter'] % self.time_every == self.time_every - 1:
-            print('{} - Time Elapsed {} iter: {:.4f}'.format(logs["tot_iter"], self.time_every, time.time() - self.start_time))
+            print('{} - {:.4f}s'.format(logs["tot_iter"], time.time() - self.start_time), end=self.endl)
             self.start_time = time.time()
 
 
@@ -764,175 +847,7 @@ class GenericDataFrameSaver(Callback):
 
 
 # for now this is only supported with the UnityImageSampelrGenerator
-class PlotUnityImagesEveryOnceInAWhile(Callback):
-    counter = 0
 
-    def __init__(self, dataset, plot_every=100, plot_only_n_times=5):
-        self.dataset = dataset
-        self.plot_every = plot_every
-        self.plot_only_n_times = plot_only_n_times
-
-    def on_training_step_end(self, batch, logs=None):
-        if logs['tot_iter'] % self.plot_every == self.plot_every - 1 and self.counter < self.plot_only_n_times:
-            framework_utils.plot_images_on_weblogger(self.dataset, self.dataset.name_generator, self.dataset.stats,
-                                                     images=logs['images'], labels=None, more=None,
-                                                     log_text=f"ITER {logs['tot_iter']}")
-            self.counter += 1
-
-
-class SequenceLearning3dDataFrameSaver(GenericDataFrameSaver):
-    def __init__(self, k, nSt, nSc, nFt, nFc, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.k = k
-        self.nSt = nSt
-        self.nSc = nSc
-        self.nFt = nFt
-        self.nFc = nFc
-        self.additional_logs_names = ['task_num', 'objC', 'objT',  'candidate_campos_XYZ', 'training_campos_XYZ', 'rel_score']
-        self.column_names.extend(self.additional_logs_names)
-        self.camera_positions_batch = None
-        self.is_support = None
-        self.task_num = None
-
-
-    def _get_additional_logs(self, logs, sample_index):
-        self.camera_positions_batch = np.array(logs['camera_positions'])
-        self.task_num = logs['tot_iter']
-
-        def unity2python(v):
-            v = copy.deepcopy(v)
-            v.T[[1, 2]] = v.T[[2, 1]]
-            return v
-
-        camera_positions_candidates = self.camera_positions_batch[sample_index][:self.nFc * self.nSc].reshape(self.nSc, self.nFc, 3)
-        camera_positions_trainings = self.camera_positions_batch[sample_index][self.nFc * self.nSc:].reshape(self.nSt, self.nFt, 3)
-
-        #################################~~~~~~DEBUG~~~~~~###############################################
-        # _, self.ax = framework_utils.create_sphere()
-        #
-        # import matplotlib.pyplot as plt
-        # plt.show()
-        # import copy
-        # def unity2python(v):
-        #     v = copy.deepcopy(v)
-        #     v.T[[1, 2]] = v.T[[2, 1]]
-        #     return v
-        #
-        # for idx, c in enumerate(self.camera_positions_batch):
-        #     if vh1:
-        #         # [i.remove() for i in vh1]
-        #         # [i.remove() for i in vh2]
-        #         vh1 = []
-        #         vh2 = []
-        #     for i in range(len(self.camera_positions_batch[0]) - 1):
-        #         vh2.append(framework_utils.add_norm_vector(unity2python(c[i + 1]), 'r', ax=self.ax))
-        #         vh1.append(framework_utils.add_norm_vector(unity2python(c[0]), 'k', ax=self.ax))
-        #################################################################
-        add_logs = [self.task_num,
-                    logs['labels'][sample_index][0].item(), logs['labels'][sample_index][1].item(),
-                    np.array([unity2python(i) for i in camera_positions_candidates]), np.array([unity2python(i) for i in camera_positions_trainings]),
-                    logs['output'][sample_index].item()]
-
-        return add_logs
-
-class MetaLearning3dDataFrameSaver(GenericDataFrameSaver):
-    def _get_additional_logs(self, logs, sample_index):
-        # each row is a camera query. It works even for Q>1
-        self.camera_positions_batch = np.array(logs['more']['camera_positions'])
-        self.task_num = logs['tot_iter']
-        additional_logs = [self.task_num, self.camera_positions_batch[self.n*self.k:][sample_index], self.camera_positions_batch[self.n * int(sample_index / self.q):self.n * int(sample_index / self.q) + self.n]]
-        return additional_logs
-
-    def _compute_and_log_metrics(self, data_frame):
-        plotly_fig, mplt_fig = framework_utils.from_dataframe_to_3D_scatter(data_frame, title=self.log_text_plot)
-        metric_str = '3D Sphere'
-        if self.weblogger == 1:
-            pass
-        if isinstance(self.weblogger, neptune.run.Run):
-            self.weblogger[metric_str].log(mplt_fig)
-            # log_chart(f'{self.log_text_plot} {metric_str}', plotly_fig)
-        return data_frame
-
-
-class TranslationDataFrameSaver(GenericDataFrameSaver):
-    def __init__(self, translation_type_str, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.translation_type_str = translation_type_str
-        self.additional_logs_names = ['transl_X', 'transl_Y', 'size_X', 'size_Y', 'rotation', 'tested_area']
-        self.index_dataframe.extend(self.additional_logs_names)
-        self.face_center_batch = None
-        self.size_object_batch = None
-        self.rotation_batch = None
-
-
-    def _get_additional_logs(self, logs, sample_index):
-        face_center_batch_t = logs['more']['center']
-        size_object_batch_t = logs['more']['size']
-        rotation_batch_t = logs['more']['rotation']
-
-        self.face_center_batch = np.array([np.array(i) for i in face_center_batch_t]).transpose()
-        self.size_object_batch = np.array([np.array(i) for i in size_object_batch_t]).transpose()
-        self.rotation_batch = np.array([np.array(i) for i in rotation_batch_t]).transpose()
-
-        additional_logs = [self.face_center_batch[sample_index][0],
-                           self.face_center_batch[sample_index][1],
-                           self.size_object_batch[sample_index][0],
-                           self.size_object_batch[sample_index][1],
-                           self.rotation_batch[sample_index],
-                           self.translation_type_str]
-        return additional_logs
-
-    def _compute_and_log_metrics(self, data_frame):
-        if self.weblogger:
-            # Plot Density Translation
-            mean_accuracy_translation = data_frame.groupby(['transl_X', 'transl_Y']).mean()['is_correct']
-            ax, im = framework_utils.imshow_density(mean_accuracy_translation, plot_args={'interpolate': True, 'size_canvas': self.size_canvas}, vmin=1 / self.num_classes - 1 / self.num_classes * 0.2, vmax=1)
-            plt.title(self.log_text_plot)
-            fig = ax.figure
-            cbar = fig.colorbar(im)
-            cbar.set_label('Mean Accuracy (%)', rotation=270, labelpad=25)
-            metric_str = 'Density Plot/{}'.format(self.log_text_plot)
-            if self.weblogger == 1:
-                wandb.log({metric_str: fig})
-            if isinstance(self.weblogger, neptune.run.Run):
-                self.weblogger[metric_str].log(fig)
-
-            plt.close()
-
-            # Plot Scale Accuracy
-            fig, ax = plt.subplots(1, 1)
-            mean_accuracy_size_X = data_frame.groupby(['size_X']).mean()['is_correct']  # generally size_X = size_Y so for now we don't bother with both
-            x = mean_accuracy_size_X.index.get_level_values('size_X')
-            plt.plot(x, mean_accuracy_size_X * 100, 'o-')
-            plt.xlabel('Size item (horizontal)')
-            plt.ylabel('Mean Accuracy (%)')
-            plt.title('size-accuracy')
-            print(f'Mean Accuracy Size: {mean_accuracy_size_X} for sizes: {x}')
-            metric_str = 'Size Accuracy/{}'.format(self.log_text_plot)
-            if self.weblogger == 1:
-                wandb.log({metric_str: plt})
-            if isinstance(self.weblogger, neptune.run.Run):
-                self.weblogger[metric_str].log(fig)
-            plt.close()
-
-            # Plot Rotation Accuracy
-            fig, ax = plt.subplots(1, 1)
-            mean_accuracy_rotation = data_frame.groupby(['rotation']).mean()['is_correct']  # generally size_X = size_Y so for now we don't bother with both
-            x = mean_accuracy_rotation.index.get_level_values('rotation')
-            plt.plot(x, mean_accuracy_rotation * 100, 'o-')
-            plt.xlabel('Rotation item (degree)')
-            plt.ylabel('Mean Accuracy (%)')
-            plt.title('rotation-accuracy')
-            print(f'Mean Accuracy Rotation: {mean_accuracy_rotation} for rotation: {x}')
-            # wandb.log({'{}/Rotation Accuracy'.format(self.log_text_plot): plt})
-            metric_str = 'Rotation Accuracy/{}'.format(self.log_text_plot)
-            if self.weblogger == 1:
-                wandb.log({metric_str: plt})
-            if isinstance(self.weblogger, neptune.run.Run):
-                self.weblogger[metric_str].log(fig)
-            plt.close()
-            plt.close()
-        return data_frame
 
 class PlotGradientWeblog(Callback):
     grad = []
