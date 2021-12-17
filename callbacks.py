@@ -1,6 +1,7 @@
 """
 Ports of Callback classes from the Keras library.
 """
+from framework_utils import Logs
 import seaborn as sn
 from sty import fg, rs, ef
 from abc import ABC
@@ -168,6 +169,7 @@ class StopFromUserInput(Callback):
         if self.stop_next_iter:
             logs['stop'] = True
             print('Stopping from user input')
+            # raise Exception
 
 class TriggerActionWhenReachingValue(Callback):
     def __init__(self, value_to_reach, metric_name, mode='max', patience=1, check_after_batch=True, action=None, action_name='', check_every=1):
@@ -210,6 +212,7 @@ class TriggerActionWhenReachingValue(Callback):
     def on_epoch_end(self, epoch, logs=None):
         if not self.check_after_batch:
             self.check_and_stop(logs)
+
 
 class TriggerActionWithPatience(Callback):
     def __init__(self, mode='min', min_delta=0, patience=10, min_delta_is_percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100, triggered_action=None, action_name='', alpha=1, weblogger=False, verbose=False):
@@ -309,7 +312,7 @@ class ClipGradNorm(Callback):
         self.max_norm = max_norm
 
     def on_training_step_end(self, batch, logs=None):
-        torch.nn.utils.clip_grad_norm(self.net.parameters(), self.max_norm)
+        torch.nn.utils.clip_grad_norm_(self.net.parameters(), self.max_norm)
 
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -380,7 +383,7 @@ class StopWhenMetricIs(Callback):
             self.check_and_stop(logs)
 
 class SaveModel(Callback):
-    def __init__(self, net, output_path, loss_metric_name='loss', log_in_weblogger=False, epsilon_loss=0.1, min_iter=100):
+    def __init__(self, net, output_path, loss_metric_name='loss', log_in_weblogger=False, epsilon_loss=0.1, min_iter=np.inf, max_iter=None):
         self.output_path = output_path
         self.net = net
         self.log_in_weblogger = log_in_weblogger
@@ -389,6 +392,7 @@ class SaveModel(Callback):
         self.min_iter = min_iter
         self.epsilone_loss = epsilon_loss
         self.loss_metric_name = loss_metric_name
+        self.max_iter = max_iter
         super().__init__()
 
     def save_model(self, path):
@@ -398,57 +402,36 @@ class SaveModel(Callback):
 
     def on_batch_end(self, batch, logs=None):
         if self.output_path is not None:
-            if ((self.last_loss - logs[self.loss_metric_name]) > self.epsilone_loss) and ((logs['tot_iter'] - self.last_iter) > self.min_iter):
+            if ((logs['tot_iter'] - self.last_iter) > self.max_iter) or \
+                    ((self.last_loss - logs[self.loss_metric_name]) > self.epsilone_loss) and\
+                    ((logs['tot_iter'] - self.last_iter) > self.min_iter):
                 self.last_iter = logs['tot_iter']
                 self.last_loss = logs[self.loss_metric_name].value  ## ouch! You cannot reimpliement assignment operator!
                 self.save_model(os.path.splitext(self.output_path)[0] + f'_checkpoint' + os.path.splitext(self.output_path)[1])
 
     def on_train_end(self, logs=None):
         if self.output_path is not None:
+            self.save_model(os.path.splitext(self.output_path)[0] + f'_checkpoint' + os.path.splitext(self.output_path)[1])
             self.save_model(self.output_path)
 
-
-#
-# class AccuracyMetrics(Callback):
-#     def __init__(self, use_cuda, log_every, log_text='', pred_str='y_pred', true_str='y_true'):
-#         self.use_cuda = use_cuda
-#         self.log_every = log_every
-#         self.pred_str = pred_str
-#         self.true_str = true_str
-#         self.log_text = log_text
-#         self.correct_train, self.total_samples = 0, 0
-#         super().__init__()
-#
-#     def update_classic_logs(self, batch_logs):
-#
-#         self.correct_train += ((batch_logs[self.pred_str].cuda() if self.use_cuda else batch_logs[self.pred_str]) ==
-#                                (batch_logs[self.true_str].cuda() if self.use_cuda else batch_logs[self.true_str])).sum().item()
-#         self.total_samples += batch_logs[self.true_str].size(0)
 
 class PrintLogs(Callback, ABC):
     def __init__(self, id, plot_every=100, plot_at_end=True):
         self.id = id
-        # self.running_logs = {}
         self.last_iter = 0
         self.plot_every = plot_every
         self.plot_at_end = plot_at_end
 
     def on_training_step_end(self, batch, logs=None):
-        # if self.id in logs:
-        #     if self.id not in self.running_logs:
-        #         self.running_logs[self.id] = []
-        #     self.running_logs[self.id].append(logs[self.id])
-
-            if logs['tot_iter'] - self.last_iter > self.plot_every:
-                # self.print_logs(self.get_value(self.running_logs[self.id]), logs)
-                self.print_logs(logs[self.id], logs)
-                # self.running_logs[self.id] = []
-                self.last_iter = logs['tot_iter']
+        if logs['tot_iter'] - self.last_iter > self.plot_every:
+            # self.print_logs(self.get_value(self.running_logs[self.id]), logs)
+            self.print_logs(logs[self.id], logs)
+            # self.running_logs[self.id] = []
+            self.last_iter = logs['tot_iter']
 
     def on_train_end(self, logs=None):
         if self.plot_at_end:
             self.print_logs(logs[self.id], logs)
-
 
 
 class PrintConsole(PrintLogs):
@@ -457,94 +440,84 @@ class PrintConsole(PrintLogs):
         super().__init__(**kwargs)
 
     def print_logs(self, values, logs):
-        if values is str:
+        if isinstance(values, str):
             value_format = values
+        elif isinstance(values, int):
+            value_format = f'{values}'
         else:
             value_format = f'{values:.3}'
         print(fg.cyan + f'{self.id}: {value_format}' + rs.fg, end=self.endln)
 
 
+class PrintNewLine(Callback):
+    def __init__(self, plot_every=100, plot_at_end=False):
+        super().__init__()
+        self.id = id
+        self.last_iter = 0
+        self.plot_every = plot_every
+        self.plot_at_end = plot_at_end
+
+    def on_training_step_end(self, batch, logs=None):
+        if logs['tot_iter'] - self.last_iter > self.plot_every:
+            print("")
 
 
 class PrintNeptune(PrintLogs):
-    def __init__(self,  weblogger, convert_str=False, **kwargs):
+    def __init__(self,  weblogger, convert_str=False, log_prefix='', **kwargs):
         self.convert_str = convert_str
         self.weblogger = weblogger
+        self.log_prefix = log_prefix
         super().__init__(**kwargs)
 
     def print_logs(self, values, logs):
         if isinstance(self.weblogger,  neptune.run.Run):
             if self.convert_str:
-                self.weblogger[self.id].log(str(values))
+                self.weblogger[self.log_prefix + self.id].log(str(values))
             else:
-                self.weblogger[self.id].log(values)
+                self.weblogger[self.log_prefix + self.id].log(values)
 
-
-# class RunningAccuracyMetrics(AccuracyMetrics):
-#     def __init__(self, use_cuda, log_every, log_text='', **kwargs):
-#         super().__init__(use_cuda, log_every, log_text, **kwargs)
-#         self.running_loss = 0
-#         self.init_classic_logs()
-#
-#     def update_classic_logs(self, batch_logs):
-#         super().update_classic_logs(batch_logs)
-#         self.running_loss += batch_logs['loss']
-#
-#     def compute_mean_loss_acc(self, num_iter):
-#         mean_loss = self.running_loss / num_iter
-#         mean_acc = 100 * self.correct_train / self.total_samples
-#         return mean_loss, mean_acc
-#
-#     def init_classic_logs(self):
-#         self.correct_train, self.total_samples, self.running_loss = 0, 0, 0
-
+from tqdm import tqdm
+import sty
 class ProgressBar(Callback):
-    def __init__(self, l):
-        self.length_bar = l
+    def __init__(self, l, batch_size, logs_keys=None):
+        self.pbar = tqdm(total=l*batch_size, dynamic_ncols=True)
+        self.batch_size = batch_size
+        self.logs_keys = logs_keys if logs_keys is not None else []
+        # self.length_bar = l
+        # self.pbar.bar_format = "{l_bar}{bar}|{n_fmt}/{total_fmt} [{elapsed}<{remaining}, ' '{rate_inv_fmt}{postfix}]"
 
     def on_training_step_end(self, batch_index, batch_logs=None):
-        framework_utils.progress_bar(batch_index, self.length_bar)
+        # framework_utils.progress_bar(batch_index, self.length_bar)
+        self.pbar.set_postfix_str(" / ".join([sty.fg.cyan + f'{lk}:{batch_logs[lk]:.5f}' + sty.rs.fg for lk in self.logs_keys]))
+        self.pbar.set_description(sty.fg.red + f'Epoch {batch_logs["epoch"]}' + sty.rs.fg)
+        self.pbar.update(self.batch_size)
 
-#
-# class StandardMetrics(RunningAccuracyMetrics):
-#     num_iter = 0
-#     time = None
-#
-#     def __init__(self, print_it=True, metrics_prefix='', weblogger=False, size_dataset=None, **kwargs):
-#         self.weblogger = weblogger
-#         self.print_it = print_it
-#         self.metrics_prefix = metrics_prefix
-#         self.size_dataset = size_dataset
-#         super().__init__(**kwargs)
-#
-#     def on_train_begin(self, logs=None):
-#         self.time = time.time()
-#
-#     def on_training_step_end(self, batch_index, batch_logs=None):
-#         self.num_iter += 1
-#         self.update_classic_logs(batch_logs)
-#         if batch_logs['tot_iter'] % self.log_every == 0:
-#             batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc'] = self.compute_mean_loss_acc(num_iter=self.num_iter)
-#             self.num_iter = 0
-#             if self.print_it:
-#                 framework_utils.progress_bar(batch_index, self.size_dataset, msg=('loss: {:.4f}, acc: ' + bg.white + fg.black+ '{:.4f}%' + rs.fg+rs.bg).format(batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
-#                 # print(('[iter{}, {:.2f}sec] loss: {:.4f}, train_acc: ' + bg.white + fg.black+ '{:.4f}%' + rs.fg+rs.bg).format(batch_logs['tot_iter'], time.time()- self.time, batch_logs[f'{self.metrics_prefix}/mean_loss'], batch_logs[f'{self.metrics_prefix}/mean_acc']))
-#
-#                 self.time = time.time()
-#             metric2 = f'accuracy {self.log_text}'
-#             metric1 = 'loss'
-#             if isinstance(self.weblogger, neptune.run.Run):
-#                 self.weblogger[metric1].log(batch_logs[f'{self.metrics_prefix}/mean_loss'])
-#                 self.weblogger[metric2].log(batch_logs[f'{self.metrics_prefix}/mean_acc'])
-#             self.init_classic_logs()
+    def on_epoch_end(self, epoch, logs=None):
+        self.pbar.reset()
+
+    def on_train_end(self, logs=None):
+        self.pbar.close()
+
+class ResetLogs(Callback):
+    def __init__(self, logs=None, on_epoch=True, reset_to=0):
+        self.log_k = logs
+        self.on_epoch = on_epoch
+        self.reset_to = reset_to
+
+    def on_epoch_end(self, epoch, logs=None):
+        if self.on_epoch:
+            if self.log_k in logs:
+                logs[self.log_k] = self.reset_to
 
 
 class DuringTrainingTest(Callback):
     test_time = 0
     num_tests = 0
 
-    def __init__(self, testing_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, weblogger=0, multiple_sec_of_test_time=None, auto_increase=False, log_text='', use_cuda=None, call_run=None):
+    def __init__(self, testing_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, weblogger=0, multiple_sec_of_test_time=None, auto_increase=False, log_text='', use_cuda=None, call_run=None, callbacks=None, compute_conf_mat=True):
+        self.callbacks = [] if callbacks is None else callbacks
         self.testing_loaders = testing_loaders
+        self.compute_conf_mat = compute_conf_mat
         self.use_cuda = use_cuda
         self.every_x_epochs = every_x_epochs
         self.auto_increase = auto_increase
@@ -562,11 +535,7 @@ class DuringTrainingTest(Callback):
         self.time_from_last_test = time.time()
 
     def get_callbacks(self, log=''):
-        return [
-            StopWhenMetricIs(value_to_reach=100, metric_name='tot_iter', check_after_batch=True),
-            StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False),
-            TotalAccuracyMetric(use_cuda=self.use_cuda,
-                                weblogger=self.weblogger, log_text=self.log_text + log)]
+        return self.callbacks + [StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False)]
 
     def run_tests(self, logs, last_test=False):
         start_test_time = time.time()
@@ -577,18 +546,16 @@ class DuringTrainingTest(Callback):
         def test(testing_loader, log='', last_test=False):
             print(f"Testing " + fg.green + f"[{testing_loader.dataset.name_generator}]" + rs.fg)
             mid_test_cb = self.get_callbacks(log)
-            if last_test:
+            if last_test and self.compute_conf_mat:
                 mid_test_cb += [ComputeConfMatrix(num_classes=len(testing_loader.dataset.classes),
                                                   weblogger=self.weblogger,
                                                   weblog_text='ConfMatrix',
                                                   class_names=testing_loader.dataset.classes)]
 
             with torch.no_grad():
-                _, logs = self.call_run(testing_loader,
+                _, logs_test = self.call_run(testing_loader,
                                         train=False,
-                                        callbacks=mid_test_cb,
-                                        )
-
+                                        callbacks=mid_test_cb)
         print("TEST IN EVAL MODE")
         self.model.eval()
         for testing_loader in self.testing_loaders:
@@ -625,7 +592,7 @@ class DuringTrainingTest(Callback):
             if (self.every_x_iter is not None and logs['tot_iter'] % self.every_x_iter):
                 print(f"\nTest every {self.every_x_iter} iterations")
             if (self.every_x_sec is not None and self.every_x_sec < time.time() - self.time_from_last_test):
-                print(f"\nTest every {self.every_x_sec} seconds ({time.time() -self.time_from_last_test} secs passed from last test)")
+                print(f"\nTest every {self.every_x_sec} seconds ({(time.time() -self.time_from_last_test):.3f} secs passed from last test)")
             if (self.multiple_sec_of_test_time is not None and time.time() - self.time_from_last_test > self.multiple_sec_of_test_time * self.test_time):
                 print(f"\nTest every {self.multiple_sec_of_test_time * self.test_time} seconds ({time.time() - self.time_from_last_test} secs passed from last test)")
 
@@ -650,28 +617,9 @@ class EndEpochStats(Callback):
         print("End epoch. Tot iter: [{}] - in [{:.4f}] seconds - tot [{:.4f}] seconds\n".format(logs['tot_iter'], time.time() - self.timer_epoch, time.time() - self.timer_train))
         print(rs.fg, end="")
 
-#
-# class TotalAccuracyMetric(AccuracyMetrics):
-#     def __init__(self, use_cuda, weblogger=True, log_text='', **kwargs):
-#         super().__init__(use_cuda, log_every=None, log_text=log_text, **kwargs)
-#         self.weblogger = weblogger
-#         self.start = time.time()
-#
-#     def on_training_step_end(self, batch_index, batch_logs=None):
-#         super().on_training_step_end(batch_index, batch_logs)
-#         self.update_classic_logs(batch_logs)
-#
-#     def on_train_end(self, logs=None):
-#         logs['total_accuracy'] = 100.0 * self.correct_train / self.total_samples
-#         print((fg.cyan + 'Total Accuracy for [{}] samples, [{}] iter, ' + ef.inverse + ef.bold + '[{}]' + rs.inverse + ': ' + ef.inverse  + '{:.4f}%'  + rs.inverse + rs.bold_dim + fg.cyan + ' - in {:.4f} seconds\n' + rs.fg).format(self.total_samples, logs["tot_iter"], self.log_text, logs["total_accuracy"], time.time() - self.start))
-#
-#         metric_str = 'Metric/{} Acc'.format(self.log_text)
-#
-#         if isinstance(self.weblogger, neptune.run.Run):
-#             self.weblogger[metric_str].log(logs['total_accuracy'])
 
 class ComputeConfMatrix(Callback):
-    def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text='', class_names=None):
+    def __init__(self, num_classes, reset_every=None, weblogger=0, weblog_text='', y_true='y_true', y_pred='y_pred', class_names=None):
 
         self.num_classes = num_classes
         self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
@@ -680,6 +628,8 @@ class ComputeConfMatrix(Callback):
         self.class_names = class_names
         self.num_iter = 0
         self.weblogger = weblogger
+        self.y_true = y_true
+        self.y_pred = y_pred
         super().__init__()
 
     def on_training_step_end(self, batch, logs=None):
@@ -687,7 +637,7 @@ class ComputeConfMatrix(Callback):
             self.confusion_matrix = torch.zeros(self.num_classes, self.num_classes)
             self.num_iter = 0
         try:
-            for t, p in zip(logs['y_true'].view(-1), logs['y_pred'].view(-1)):
+            for t, p in zip(logs[self.y_true].view(-1), logs[self.y_pred].view(-1)):
                 self.confusion_matrix[t.long(), p.long()] += 1
         except IndexError:
             print(fg.red + "Index error during confusion matrix calculation. This shouldn't happen (unless you are on the local machine)!" + rs.fg)
@@ -769,7 +719,7 @@ class GenericDataFrameSaver(Callback):
                  np.concatenate(np.array([np.array(['max_softm', 'softm_class']),
                                           cat_to_save,
                                           np.array(['max_logits', 'logits_class']),
-                                          cat_to_save]))] ## this currently doesn't work!!
+                                          cat_to_save]))]  ## this currently doesn't work!!
         return array
 
     def __init__(self, num_classes, use_cuda, network_name, size_canvas, weblogger=0, log_text_plot='', output_and_softmax=False):
@@ -847,8 +797,6 @@ class GenericDataFrameSaver(Callback):
 
 
 # for now this is only supported with the UnityImageSampelrGenerator
-
-
 class PlotGradientWeblog(Callback):
     grad = []
     layers = []

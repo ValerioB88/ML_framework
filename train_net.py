@@ -4,18 +4,10 @@ of the Keras `model.fit()` API.
 """
 import torch
 from typing import Callable, List, Union
-
-import torchvision.models
-
 from callbacks import CallbackList, Callback
 from framework_utils import make_cuda
-import framework_utils
 from torch._six import inf
 from models.sequence_learner import SequenceMatchingNetSimple
-import framework_utils
-# from torchviz import make_dot
-import matplotlib.pyplot as plt
-import torchvision
 EPSILON = 1e-8
 
 
@@ -54,8 +46,10 @@ def clip_grad_norm_(parameters, max_norm, norm_type=2):
     return total_norm
 
 
-def standard_net_step(data, model, loss_fn, optimizer, use_cuda, loader, train):
-    logs = {}
+def collect_logs(logs, **kwargs):
+    return None
+
+def standard_net_step(data, model, loss_fn, optimizer, use_cuda, logs,  train):
     images, labels, more = data
     images = make_cuda(images, use_cuda)
     labels = make_cuda(labels, use_cuda)
@@ -71,8 +65,6 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, loader, train):
                    labels)
     logs['output'] = output_batch
     logs.update(more)
-    # logs['more'] = more
-    # logs['images'] = images
 
     predicted = torch.argmax(output_batch, -1)
     if train:
@@ -83,6 +75,7 @@ def standard_net_step(data, model, loss_fn, optimizer, use_cuda, loader, train):
 
 
 def sequence_net_Ntrain_1cand(data, model: SequenceMatchingNetSimple, loss_fn, optimizer, use_cuda, loader, train, concatenate=False):
+    dataset = loader.dataset
     k = dataset.sampler.k
     nSc = dataset.sampler.nSc
     nSt = dataset.sampler.nSt
@@ -220,7 +213,6 @@ def run(data_loader, use_cuda, net, callbacks: List[Callback] = None, optimizer=
             if logs['stop']:
                 break
             tot_iter += 1
-
 
         callbacks.on_epoch_end(epoch, logs)
         epoch += 1

@@ -161,7 +161,7 @@ class SubsetImageFolder(MyImageFolder):
 
 class Stats(ImageStat.Stat):
     def __add__(self, other):
-        return Stats(list(map(np.add, self.h, other.h)))
+        return Stats(list(map(np.add, np.array(self.h)/255, np.array(other.h)/255)))
 
 
 def compute_mean_and_std_from_dataset(dataset, dataset_path=None, max_iteration=100, data_loader=None, verbose=True):
@@ -176,26 +176,27 @@ def compute_mean_and_std_from_dataset(dataset, dataset_path=None, max_iteration=
     statistics = None
     c = 0
     stop = False
-    for data, _, _ in data_loader:
-        for b in range(data.shape[0]):
-            if c % 10 == 9 and verbose:
-                print(f'{c}/{max_iteration}, m: {np.array(statistics.mean)/255}, std: {np.array(statistics.stddev)/255}')
-            c += 1
-            if statistics is None:
-                statistics = Stats(tf.ToPILImage()(data[b]))
-            else:
-                statistics += Stats(tf.ToPILImage()(data[b]))
-            if c > max_iteration:
-                stop = True
+    while stop is False:
+        for data, _, _ in data_loader:
+            for b in range(data.shape[0]):
+                if c % 10 == 9 and verbose:
+                    print(f'{c}/{max_iteration}, m: {np.around(np.array(statistics.mean)/255,4)}, std: {np.around(np.array(statistics.stddev)/255,4)}')
+                c += 1
+                if statistics is None:
+                    statistics = Stats(tf.ToPILImage()(data[b]))
+                else:
+                    statistics += Stats(tf.ToPILImage()(data[b]))
+                if c > max_iteration:
+                    stop = True
+                    break
+            if stop:
                 break
-        if stop:
-            break
 
     stats['time_one_iter'] = (time() - start)/max_iteration
     stats['mean'] = np.array(statistics.mean)/255
-    stats['std'] = np.array(statistics.stddev) / 255
+    stats['std'] = np.array(statistics.stddev)/255
     stats['iter'] = max_iteration
-    print((fg.cyan + 'mean: {}; std: {}, time: {}' + rs.fg).format(stats['mean'], stats['std'], stats['time_one_iter'])) if verbose else None
+    print(fg.cyan + f'mean={np.around(stats["mean"],4)}, std={np.around(stats["std"], 4)}, time1it: {np.around(stats["time_one_iter"], 4)}s' + rs.fg) if verbose else None
     if dataset_path is not None:
         print('Saving in {}'.format(dataset_path))
         with open(dataset_path, 'wb') as f:

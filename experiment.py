@@ -19,7 +19,7 @@ class Config(ABC):
         self.use_cuda = False
         self.loss_fn = None
         self.optimizer = None
-
+        original_kwargs = kwargs.copy()
         if torch.cuda.is_available():
             print('Using cuda - you are probably on the server')
             self.use_cuda = True
@@ -91,6 +91,16 @@ class Config(ABC):
         if self.max_iterations is None:
             self.max_iterations = 5000 if self.use_cuda else 10
 
+        if not self.verbose:
+            print(fg.magenta)
+
+            print('***PARAMS***')
+            if not self.use_cuda:
+                list_tags.append('LOCALTEST')
+
+            for i in sorted(original_kwargs.keys()):
+                print(f'\t{i} : ' + ef.inverse + f'{original_kwargs[i]}' + rs.inverse)
+            print(rs.fg)
         self.finalize_init(PARAMS, list_tags)
     #
     # def set_loss_fn(self, loss_fn):
@@ -190,12 +200,13 @@ class Config(ABC):
         print(fg.magenta)
         print('**LIST_TAGS**:')
         print(list_tags)
-        print('***PARAMS***')
-        if not self.use_cuda:
-            list_tags.append('LOCALTEST')
+        if self.verbose:
+            print('***PARAMS***')
+            if not self.use_cuda:
+                list_tags.append('LOCALTEST')
 
-        for i in sorted(PARAMS.keys()):
-            print(f'\t{i} : ' + ef.inverse + f'{PARAMS[i]}' + rs.inverse)
+            for i in sorted(PARAMS.keys()):
+                print(f'\t{i} : ' + ef.inverse + f'{PARAMS[i]}' + rs.inverse)
 
         if self.weblogger == 2:
             neptune_run = neptune.init(f'valeriobiscione/{self.project_name}')

@@ -9,47 +9,62 @@ import os
 
 class GrabNet():
     @classmethod
-    def get_net(cls, network_name, imagenet_pt=False, num_classes=1000, **kwargs):
+    def get_net(cls, network_name, imagenet_pt=False, num_classes=None, **kwargs):
+        """
+        @num_classes = None indicates that the last layer WILL NOT be changed.
+        """
         if imagenet_pt:
             print(fg.red + "Loading ImageNet" + rs.fg)
 
         nc = 1000 if imagenet_pt else num_classes
         if network_name == 'vgg11':
             net = torchvision.models.vgg11(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+            if num_classes is not None:
+                net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
         elif network_name == 'vgg11bn':
             net = torchvision.models.vgg11_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+            if num_classes is not None:
+                net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
         elif network_name == 'vgg16':
             net = torchvision.models.vgg16(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+            if num_classes is not None:
+                net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
         elif network_name == 'vgg16bn':
             net = torchvision.models.vgg16_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+            if num_classes is not None:
+                net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
         elif network_name == 'vgg19bn':
             net = torchvision.models.vgg19_bn(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+            if num_classes is not None:
+                net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
         elif network_name == 'resnet18':
             net = torchvision.models.resnet18(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.fc = nn.Linear(net.fc.in_features, num_classes)
+            if num_classes is not None:
+                net.fc = nn.Linear(net.fc.in_features, num_classes)
         elif network_name == 'resnet50':
             net = torchvision.models.resnet50(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.fc = nn.Linear(net.fc.in_features, num_classes)
+            if num_classes is not None:
+                net.fc = nn.Linear(net.fc.in_features, num_classes)
         elif network_name == 'alexnet':
             net = torchvision.models.alexnet(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
+            if num_classes is not None:
+                net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, num_classes)
         elif network_name == 'inception_v3':  # nope
             net = torchvision.models.inception_v3(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.fc = nn.Linear(net.fc.in_features, num_classes)
+            if num_classes is not None:
+                net.fc = nn.Linear(net.fc.in_features, num_classes)
         elif network_name == 'densenet121':
             net = torchvision.models.densenet121(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.classifier = nn.Linear(net.classifier.in_features, num_classes)
+            if num_classes is not None:
+                net.classifier = nn.Linear(net.classifier.in_features, num_classes)
         elif network_name == 'densenet201':
             net = torchvision.models.densenet201(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.classifier = nn.Linear(net.classifier.in_features, num_classes)
+            if num_classes is not None:
+                net.classifier = nn.Linear(net.classifier.in_features, num_classes)
         elif network_name == 'googlenet':
             net = torchvision.models.googlenet(pretrained=imagenet_pt, progress=True, num_classes=nc)
-            net.fc = nn.Linear(net.fc.in_features, num_classes)
+            if num_classes is not None:
+                net.fc = nn.Linear(net.fc.in_features, num_classes)
         else:
             net = cls.get_other_nets(network_name, num_classes, imagenet_pt, **kwargs)
             assert False if net is False else True, f"Network name {network_name} not recognized"
@@ -61,13 +76,14 @@ class GrabNet():
         pass
 
 
-def prepare_network_training(net, config):
+def prepare_network(net, config, train=True):
     pretraining_file = 'vanilla' if config.pretraining == 'ImageNet' else config.pretraining
     net = load_pretraining(net, pretraining_file, config.use_cuda)
-    framework_utils.print_net_info(net) if config.verbose else None
     net.cuda() if config.use_cuda else None
     cudnn.benchmark = True
-    net.train()
+    net.train() if train else net.eval()
+    framework_utils.print_net_info(net) if config.verbose else None
+
 
 
 def load_pretraining(net, pretraining, use_cuda=None):
@@ -117,16 +133,16 @@ def get_train_callbacks(net, config, log_text, train_loader, test_loaders=None, 
 
     all_cb = [
         EndEpochStats(),
-        StandardMetrics(log_every=5, print_it=True,
-                        use_cuda=config.use_cuda,
-                        weblogger=config.weblogger, log_text=log_text,
-                        metrics_prefix='cnsl',
-                        size_dataset=len(train_loader)),
+        # StandardMetrics(log_every=5, print_it=True,
+        #                 use_cuda=config.use_cuda,
+        #                 weblogger=config.weblogger, log_text=log_text,
+        #                 metrics_prefix='cnsl',
+        #                 size_dataset=len(train_loader)),
 
         StopFromUserInput(),
         PlotIterationsInfo(time_every=100),
-        TotalAccuracyMetric(use_cuda=config.use_cuda,
-                            weblogger=None, log_text=log_text),
+        # TotalAccuracyMetric(use_cuda=config.use_cuda,
+        #                     weblogger=None, log_text=log_text),
         SaveModel(net=net, output_path=config.model_output_filename, min_iter=500)]
 
     if config.stop_when_train_acc_is != np.inf:

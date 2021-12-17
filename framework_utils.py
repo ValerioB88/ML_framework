@@ -14,12 +14,21 @@ from matplotlib.patches import FancyArrowPatch
 from mpl_toolkits.mplot3d import proj3d
 from collections import namedtuple
 import matplotlib as mpl
+import matplotlib
+import shutil
+import re
+import glob
+import pathlib
 
+
+plt.rcParams['figure.facecolor'] = (0.9, 0.9, 0.9)
+# matplotlib.use('TkAgg')
+matplotlib.use('Qt5Agg')
 new_rc_params = {'text.usetex': False,
 "svg.fonttype": 'none'
 }
 mpl.rcParams.update(new_rc_params)
-desired_width = 420
+desired_width = 423
 np.set_printoptions(linewidth=desired_width)
 torch.set_printoptions(linewidth=desired_width)
 pd.set_option("display.max.columns", None)
@@ -29,6 +38,40 @@ pd.set_option("expand_frame_repr", False) # print cols side by side as it's supp
 pd.set_option("display.max_rows", None, "display.max_columns", None)
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+#
+
+def get_all_dir_tokens(folder, delimiters=None):
+    if delimiters is None:
+        delimiters = os.path.sep, "_"
+    all_folders = [r for r, d, f in os.walk(folder) if not d]
+    all_subdirs = [r.split(folder)[1] for r in all_folders]
+
+    regexPattern = '|'.join(map(re.escape, delimiters))
+
+    all_dirs_tokens = [[i for i in re.split(regexPattern, d) if i] for d in all_subdirs]
+    return np.array(all_dirs_tokens).T, all_folders  # check if dimension is ok
+
+
+def rearrange_folders(folder, string, tokens, all_folders):
+    folder = folder.strip('//').strip('/')
+    # shutil.copytree(folder, folder + '_tmp')
+    # shutil.rmtree(folder)
+    pathlib.Path(folder).mkdir(parents=True, exist_ok=True)
+    tokens = tokens.T.tolist()
+    new_folders = [folder + '_tmp//' + f'{string}'.format(*i) for i in tokens]
+    # new_folders = [folder + '//{0}//{2}//{1}_{4}'.format(*i) for i in tokens]
+
+    for i in range(len(all_folders)):
+        old = all_folders[i]
+        new = new_folders[i]
+        pathlib.Path(new).mkdir(parents=True, exist_ok=True)
+        [shutil.copy(i, new) for i in glob.glob(old + '/**')]
+    shutil.move(folder, folder + '_bk')
+    shutil.move(folder + '_tmp', folder)
+
+# folder = './results/pomerantz_stimuli'
+# tokens, all_folders = get_all_dir_tokens(folder)
+# rearrange_folders(folder, '{0}//{2}//{1}_{4}', tokens, all_folders)
 
 class Logs():
     value = None
@@ -68,6 +111,9 @@ class Logs():
 
     def __mul__(self, other):
         return self.value * other
+
+    def __rmul__(self, other):
+        return other * self.value
 
     def __floordiv__(self, other):
         return self.value // other
@@ -277,6 +323,7 @@ def print_net_info(net):
 
     print('***Network***')
     print(net)
+    print(ef.inverse + f"Network is in {('~train~' if net.training else '~eval~')} mode." + rs.inverse)
     print(rs.fg)
     print()
 
