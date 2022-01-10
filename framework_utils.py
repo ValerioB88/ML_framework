@@ -19,7 +19,8 @@ import shutil
 import re
 import glob
 import pathlib
-
+from pathlib import Path
+import pprint
 
 plt.rcParams['figure.facecolor'] = (0.9, 0.9, 0.9)
 # matplotlib.use('TkAgg')
@@ -43,16 +44,28 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 def get_all_dir_tokens(folder, delimiters=None):
     if delimiters is None:
         delimiters = os.path.sep, "_"
-    all_folders = [r for r, d, f in os.walk(folder) if not d]
-    all_subdirs = [r.split(folder)[1] for r in all_folders]
+    all_files = [(r, f) for r, d, f in os.walk(folder) if not d]
+    all_files = sum(*[[["\\".join([i[0], j]) for j in i[1]] for i in all_files]], [])
+    all_subdirs = [r.split(folder)[1] for r in all_files]
 
     regexPattern = '|'.join(map(re.escape, delimiters))
 
     all_dirs_tokens = [[i for i in re.split(regexPattern, d) if i] for d in all_subdirs]
-    return np.array(all_dirs_tokens).T, all_folders  # check if dimension is ok
+    tokens = np.array(all_dirs_tokens).T
+    if not len(np.unique([len(t) for t in tokens])) == 1:
+        print(fg.yellow + "Different tokens' length! Can't reformart" + rs.fg)
+    tt = {idx: list(t[0:np.min([3, len(t)])]) for idx, t in enumerate(tokens)}
+    print(fg.blue)
+    print(f"EXAMPLE TOKENS: \n")
+    import json
+    print(json.dumps(tt, indent=4))
+    print(rs.fg)
+    return tokens, all_files
 
 
-def rearrange_folders(folder, string, tokens, all_folders):
+def rearrange_folders(folder, string, tokens, all_files):
+    # check if dimension is ok
+    assert len(np.unique([len(t) for t in tokens])) == 1, "Different tokens' length! Can't reformart"
     folder = folder.strip('//').strip('/')
     # shutil.copytree(folder, folder + '_tmp')
     # shutil.rmtree(folder)
@@ -61,13 +74,16 @@ def rearrange_folders(folder, string, tokens, all_folders):
     new_folders = [folder + '_tmp//' + f'{string}'.format(*i) for i in tokens]
     # new_folders = [folder + '//{0}//{2}//{1}_{4}'.format(*i) for i in tokens]
 
-    for i in range(len(all_folders)):
-        old = all_folders[i]
+    for i in range(len(all_files)):
+        old = all_files[i]
         new = new_folders[i]
-        pathlib.Path(new).mkdir(parents=True, exist_ok=True)
-        [shutil.copy(i, new) for i in glob.glob(old + '/**')]
+        Path(new).parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(old, new)
     shutil.move(folder, folder + '_bk')
     shutil.move(folder + '_tmp', folder)
+
+# tokens, all_files = get_all_dir_tokens('./results/pomerantz_stimuli/special')
+# rearrange_folders('./results/pomerantz_stimuli/special', '//{0}//{2}_{1}//{3}//{4}', tokens, all_files)
 
 # folder = './results/pomerantz_stimuli'
 # tokens, all_folders = get_all_dir_tokens(folder)
