@@ -43,7 +43,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 def get_all_dir_tokens(folder, delimiters=None):
     if delimiters is None:
-        delimiters = os.path.sep, "_"
+        delimiters = os.path.sep, "_", "."
     all_files = [(r, f) for r, d, f in os.walk(folder) if not d]
     all_files = sum(*[[["\\".join([i[0], j]) for j in i[1]] for i in all_files]], [])
     all_subdirs = [r.split(folder)[1] for r in all_files]
@@ -53,7 +53,8 @@ def get_all_dir_tokens(folder, delimiters=None):
     all_dirs_tokens = [[i for i in re.split(regexPattern, d) if i] for d in all_subdirs]
     tokens = np.array(all_dirs_tokens).T
     if not len(np.unique([len(t) for t in tokens])) == 1:
-        print(fg.yellow + "Different tokens' length! Can't reformart" + rs.fg)
+        assert False, fg.yellow + "Different tokens' length! Can't reformart" + rs.fg
+
     tt = {idx: list(t[0:np.min([3, len(t)])]) for idx, t in enumerate(tokens)}
     print(fg.blue)
     print(f"EXAMPLE TOKENS: \n")
@@ -64,6 +65,9 @@ def get_all_dir_tokens(folder, delimiters=None):
 
 
 def rearrange_folders(folder, string, tokens, all_files):
+    from datetime import datetime
+
+    today = datetime.now()
     # check if dimension is ok
     assert len(np.unique([len(t) for t in tokens])) == 1, "Different tokens' length! Can't reformart"
     folder = folder.strip('//').strip('/')
@@ -71,19 +75,22 @@ def rearrange_folders(folder, string, tokens, all_files):
     # shutil.rmtree(folder)
     pathlib.Path(folder).mkdir(parents=True, exist_ok=True)
     tokens = tokens.T.tolist()
-    new_folders = [folder + '_tmp//' + f'{string}'.format(*i) for i in tokens]
-    # new_folders = [folder + '//{0}//{2}//{1}_{4}'.format(*i) for i in tokens]
+    date = today.strftime("%H%M%S_%d%m%y")
 
+    new_folders = [folder + f'_rearranged_{date}//' + eval('f"' + re.sub(r"(\d)", r"i[\1]", string) + '"') for i in tokens]
+    # new_folders = [folder + '//{0}//{2}//{1}_{4}'.format(*i) for i in tokens]
+    # shutil.copytree(folder, folder + '_bk')
     for i in range(len(all_files)):
         old = all_files[i]
         new = new_folders[i]
         Path(new).parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(old, new)
-    shutil.move(folder, folder + '_bk')
-    shutil.move(folder + '_tmp', folder)
+        shutil.copy(old, new)
+    # shutil.move(folder + '_tmp', folder)
 
-# tokens, all_files = get_all_dir_tokens('./results/pomerantz_stimuli/special')
-# rearrange_folders('./results/pomerantz_stimuli/special', '//{0}//{2}_{1}//{3}//{4}', tokens, all_files)
+# tokens, all_files = get_all_dir_tokens('./results/pomerantz_stimuli/hierarchical')
+# rearrange_folders('./results/pomerantz_stimuli/subhierarchical', "//{0}//{1}_{2}_{3}//{(4.lstrip('_') if 4 == '_cossim' else 4)}.{5}", tokens, all_files)
+
+# rearrange_folders('./results/pomerantz_stimuli/special', '//{0}_{2}_{1}_{3}_"({4}).upper()")', tokens, all_files)
 
 # folder = './results/pomerantz_stimuli'
 # tokens, all_folders = get_all_dir_tokens(folder)
@@ -313,6 +320,13 @@ def add_norm_vector(u, col="k", ax=None, norm=True, lw=2, **kwargs):
     ax.add_artist(vh)
     return vh
 
+def get_all_files_with_ext(path, ext):
+    all_files = []
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            if (file.endswith(ext)):
+                all_files.append(os.path.join(root, file))
+    return all_files
 
 def make_cuda(fun, is_cuda):
     return fun.cuda() if is_cuda else fun
