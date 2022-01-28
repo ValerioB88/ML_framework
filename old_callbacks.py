@@ -18,7 +18,7 @@ class PlotUnityImagesEveryOnceInAWhile(Callback):
 
     def on_training_step_end(self, batch, logs=None):
         if logs['tot_iter'] % self.plot_every == self.plot_every - 1 and self.counter < self.plot_only_n_times:
-            framework_utils.plot_images_on_weblogger(self.dataset, self.dataset.name_generator, self.dataset.stats,
+            framework_utils.plot_images_on_weblogger(self.dataset.name_generator, self.dataset.stats,
                                                      images=logs['images'], labels=None, more=None,
                                                      log_text=f"ITER {logs['tot_iter']}")
             self.counter += 1

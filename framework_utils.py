@@ -24,7 +24,11 @@ import pprint
 
 plt.rcParams['figure.facecolor'] = (0.9, 0.9, 0.9)
 # matplotlib.use('TkAgg')
-matplotlib.use('Qt5Agg')
+if not torch.cuda.is_available():
+    matplotlib.use('Qt5Agg')
+else:
+    matplotlib.use('agg')
+
 new_rc_params = {'text.usetex': False,
 "svg.fonttype": 'none'
 }
@@ -39,7 +43,7 @@ pd.set_option("expand_frame_repr", False) # print cols side by side as it's supp
 pd.set_option("display.max_rows", None, "display.max_columns", None)
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-#
+
 
 def get_all_dir_tokens(folder, delimiters=None):
     if delimiters is None:
@@ -49,7 +53,10 @@ def get_all_dir_tokens(folder, delimiters=None):
     all_subdirs = [r.split(folder)[1] for r in all_files]
 
     regexPattern = '|'.join(map(re.escape, delimiters))
-
+    d = all_subdirs[0]
+    import itertools as it
+    cnt = it.count()
+    pattern = re.sub(r'[a-zA-Z\-]+', lambda x: f'{{{next(cnt)}}}', d)
     all_dirs_tokens = [[i for i in re.split(regexPattern, d) if i] for d in all_subdirs]
     tokens = np.array(all_dirs_tokens).T
     if not len(np.unique([len(t) for t in tokens])) == 1:
@@ -61,7 +68,7 @@ def get_all_dir_tokens(folder, delimiters=None):
     import json
     print(json.dumps(tt, indent=4))
     print(rs.fg)
-    return tokens, all_files
+    return tokens, all_files, pattern
 
 
 def rearrange_folders(folder, string, tokens, all_files):
@@ -87,8 +94,8 @@ def rearrange_folders(folder, string, tokens, all_files):
         shutil.copy(old, new)
     # shutil.move(folder + '_tmp', folder)
 
-# tokens, all_files = get_all_dir_tokens('./results/pomerantz_stimuli/hierarchical')
-# rearrange_folders('./results/pomerantz_stimuli/subhierarchical', "//{0}//{1}_{2}_{3}//{(4.lstrip('_') if 4 == '_cossim' else 4)}.{5}", tokens, all_files)
+# tokens, all_files, pattern = get_all_dir_tokens('./results/pomerantz_stimuli/special')
+# rearrange_folders('./results/pomerantz_stimuli/special', "\\{0}\\{1}_{2}\\{(3 + '-ts' if 3 == 'parentheses' or 3 == 'parentheses-crossed' else 3)}\\{4}.{5}", tokens, all_files)
 
 # rearrange_folders('./results/pomerantz_stimuli/special', '//{0}_{2}_{1}_{3}_"({4}).upper()")', tokens, all_files)
 
@@ -384,13 +391,15 @@ def weblog_dataset_info(dataloader, log_text='', dataset_name=None, weblogger=1,
     nc = dataset.classes
     for idx, data in enumerate(dataloader):
         images, labels, more = data
-        plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger)
+        plot_images_on_weblogger(dataset_name, stats, images, labels, more, log_text, weblogger)
         if idx + 1 >= num_batches_to_log:
             break
 
 
-def plot_images_on_weblogger(dataset, dataset_name, stats, images, labels, more, log_text, weblogger=2):
+def plot_images_on_weblogger(dataset_name, stats, images, labels, more, log_text, weblogger=2):
     plot_images = images[0:np.max((4, len(images)))]
+    if labels is None:
+        labels = np.repeat('', len(plot_images))
     labels = labels[0:np.max((4, len(labels)))]
     add_text = [''] * len(labels)
     if isinstance(more, dict) and 'image_name' in list(more.keys()):

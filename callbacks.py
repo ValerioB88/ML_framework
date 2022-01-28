@@ -215,7 +215,7 @@ class TriggerActionWhenReachingValue(Callback):
 
 
 class TriggerActionWithPatience(Callback):
-    def __init__(self, mode='min', min_delta=0, patience=10, min_delta_is_percentage=False, reaching_goal=None, metric_name='nept/mean_acc', check_every=100, triggered_action=None, action_name='', alpha=1, weblogger=False, verbose=False):
+    def __init__(self, mode='min', min_delta=0, patience=10, min_delta_is_percentage=False, metric_name='nept/mean_acc', check_every=100, triggered_action=None, action_name='', weblogger=False, verbose=False):
         super().__init__()
         self.verbose = verbose
         self.triggered_action = triggered_action
@@ -227,57 +227,38 @@ class TriggerActionWithPatience(Callback):
         self.num_bad_iters = 0
         self.is_better = None
         self._init_is_better(mode, min_delta, min_delta_is_percentage)
-        self.reaching_goal = reaching_goal
         self.metric_name = metric_name
         self.action_name = action_name
         self.first_iter = True
-        self.alpha = alpha
         self.weblogger = weblogger
         self.exp_metric = None
-        # reaching goal: if the metric stays higher/lower (max/min) than the goal for patience steps
-        if reaching_goal is not None:
-            self.best = reaching_goal
-            # self.mode = 'min'
         self.patience = self.patience // self.check_every
         if patience == 0:
             self.is_better = lambda a, b: True
             self.step = lambda a: False
-        self.string = f'Action {self.action_name} for metric [{self.metric_name}] <> {self.reaching_goal if self.reaching_goal is not None else self.mode}, checking every [{self.check_every} batch iters], patience: {self.patience} [corresponding to [{patience}] batch iters]]' + ((f' with ExpMovAvg alpha: {self.alpha}') if self.alpha != 1 else '')
+        self.string = f'Action {self.action_name} for metric [{self.metric_name}] <> {self.mode}, checking every [{self.check_every} batch iters], patience: {self.patience} [corresponding to [{patience}] batch iters]]'
         print(f'Set up action: {self.string}')
 
     def on_batch_end(self, batch, logs=None):
         if self.metric_name not in logs:
             return True
 
-        if self.first_iter:
-            self.exp_fun = framework_utils.ExpMovingAverage(logs[self.metric_name], alpha=self.alpha)
-            self.first_iter = False
-            return
 
         if logs['tot_iter'] % self.check_every == 0:
-            metrics = self.exp_fun(logs[self.metric_name]).value
-            print(f"Iter: {logs['tot_iter']}, Metric: {logs[self.metric_name]}, Exp Metric: {metrics}") if self.verbose else None
+            metrics = logs[self.metric_name].value
+            print(f"Iter: {logs['tot_iter']}, Metric: {logs[self.metric_name]}") if self.verbose else None
 
             if isinstance(self.weblogger, neptune.run.Run):
-                self.weblogger[f'{self.metric_name} - a: {self.alpha} - action: {self.action_name}'].log(metrics)
+                self.weblogger[f'{self.metric_name} - action: {self.action_name}'].log(metrics)
             if self.best is None:
                 self.best = metrics
                 return
 
-            if np.isnan(metrics):
-                return
-            if self.reaching_goal is not None:
-                if self.is_better(metrics, self.best):
-                    self.num_bad_iters += 1
-                else:
-                    self.num_bad_iters = 0
-
+            if self.is_better(metrics, self.best):
+                self.num_bad_iters = 0  # bad epochs: does not 'improve'
+                self.best = metrics
             else:
-                if self.is_better(metrics, self.best):
-                    self.num_bad_iters = 0  # bad epochs: does not 'improve'
-                    self.best = metrics
-                else:
-                    self.num_bad_iters += 1
+                self.num_bad_iters += 1
             print(f"Num Bad Iter: {self.num_bad_iters}") if self.verbose else None
             print(f"Patience: {self.num_bad_iters}/{self.patience}") if (self.verbose or self.patience - self.num_bad_iters < 20) else None
 
@@ -514,7 +495,7 @@ class DuringTrainingTest(Callback):
     test_time = 0
     num_tests = 0
 
-    def __init__(self, testing_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, weblogger=0, multiple_sec_of_test_time=None, auto_increase=False, log_text='', use_cuda=None, call_run=None, callbacks=None, compute_conf_mat=True):
+    def __init__(self, testing_loaders, every_x_epochs=None, every_x_iter=None, every_x_sec=None, weblogger=0, multiple_sec_of_test_time=None, auto_increase=False, log_text='', use_cuda=None, call_run=None, callbacks=None, compute_conf_mat=True, plot_samples_corr_incorr=False):
         self.callbacks = [] if callbacks is None else callbacks
         self.testing_loaders = testing_loaders
         self.compute_conf_mat = compute_conf_mat
@@ -530,12 +511,15 @@ class DuringTrainingTest(Callback):
         self.call_run = call_run
         self.time_from_last_test = None
         self.multiple_sec_of_test_time = multiple_sec_of_test_time
+        self.plot_samples_corr_incorr = plot_samples_corr_incorr
 
     def on_train_begin(self, logs=None):
         self.time_from_last_test = time.time()
 
-    def get_callbacks(self, log=''):
-        return self.callbacks + [StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False)]
+    def get_callbacks(self, log, testing_loader):
+        cb = self.callbacks + [StopWhenMetricIs(value_to_reach=0, metric_name='epoch', check_after_batch=False)]
+        cb.append(PlotImagesEveryOnceInAWhile(self.weblogger, testing_loader.dataset, plot_every=1, plot_only_n_times=1, plot_at_the_end=False, max_images=20, text=f"Test no. {self.num_tests}")) if self.plot_samples_corr_incorr else None
+        return cb
 
     def run_tests(self, logs, last_test=False):
         start_test_time = time.time()
@@ -545,17 +529,18 @@ class DuringTrainingTest(Callback):
 
         def test(testing_loader, log='', last_test=False):
             print(f"Testing " + fg.green + f"[{testing_loader.dataset.name_generator}]" + rs.fg)
-            mid_test_cb = self.get_callbacks(log)
-            if last_test and self.compute_conf_mat:
+            mid_test_cb = self.get_callbacks(log, testing_loader)
+            if self.compute_conf_mat:
                 mid_test_cb += [ComputeConfMatrix(num_classes=len(testing_loader.dataset.classes),
                                                   weblogger=self.weblogger,
-                                                  weblog_text='ConfMatrix',
+                                                  weblog_text=f'ConfMatrix test no. {self.num_tests}',
                                                   class_names=testing_loader.dataset.classes)]
 
             with torch.no_grad():
                 _, logs_test = self.call_run(testing_loader,
                                         train=False,
-                                        callbacks=mid_test_cb)
+                                        callbacks=mid_test_cb,
+                                        collect_images=True if self.plot_samples_corr_incorr else False)
         print("TEST IN EVAL MODE")
         self.model.eval()
         for testing_loader in self.testing_loaders:
@@ -794,6 +779,45 @@ class GenericDataFrameSaver(Callback):
         data_frame = self._compute_and_log_metrics(data_frame)
         logs['dataframe'] = data_frame
 
+
+class PlotImagesEveryOnceInAWhile(Callback):
+    counter = 0
+
+    def __init__(self, weblogger, dataset, plot_every=1, plot_only_n_times=5, plot_at_the_end=False, max_images=None, text=''):
+        self.dataset = dataset
+        self.plot_every = plot_every
+        self.plot_only_n_times = plot_only_n_times
+        self.weblogger = weblogger
+        self.plot_at_the_end = plot_at_the_end
+        self.max_images = max_images
+        self.text = text
+    def on_training_step_end(self, batch, logs=None):
+        if logs['tot_iter'] % self.plot_every == self.plot_every - 1 and self.counter < self.plot_only_n_times:
+            self.plot(logs)
+
+    def on_train_end(self, logs=None):
+        if self.plot_at_the_end:
+            self.plot(logs)
+
+    def plot(self, logs):
+        images = logs['images'].cpu()
+        corr = logs['y_true'] == logs['y_pred']
+        if self.max_images:
+            images = images[:np.min([len(images), self.max_images])]
+            corr = corr[:np.min([len(images), self.max_images])]
+
+        corr_images = images[corr]
+        if len(corr_images) > 0:
+            framework_utils.plot_images_on_weblogger(self.dataset.name_generator, self.dataset.stats,
+                                                     images=corr_images, labels=logs['y_true'], more=None,
+                                                     log_text=f"{self.text} - CORRECT", weblogger=self.weblogger)
+        incorr_images = images[~corr]
+        if len(incorr_images) > 0:
+            framework_utils.plot_images_on_weblogger(self.dataset.name_generator, self.dataset.stats,
+                                                     images=incorr_images, labels=logs['y_true'], more=None,
+                                                     log_text=f"{self.text} - INCORRECT", weblogger=self.weblogger)
+
+        self.counter += 1
 
 
 # for now this is only supported with the UnityImageSampelrGenerator
