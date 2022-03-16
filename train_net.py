@@ -4,10 +4,10 @@ of the Keras `model.fit()` API.
 """
 import torch
 from typing import Callable, List, Union
-from callbacks import CallbackList, Callback
-from framework_utils import make_cuda
+from .callbacks import CallbackList, Callback
+from .framework_utils import make_cuda
 from torch._six import inf
-from models.sequence_learner import SequenceMatchingNetSimple
+from .models.sequence_learner import SequenceMatchingNetSimple
 EPSILON = 1e-8
 
 

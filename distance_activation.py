@@ -1,5 +1,5 @@
 import torch
-from framework_utils import make_cuda
+from .framework_utils import make_cuda
 import sty
 import numpy as np
 from abc import ABC, abstractmethod

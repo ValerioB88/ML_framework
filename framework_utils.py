@@ -22,6 +22,24 @@ import pathlib
 from pathlib import Path
 import pprint
 
+
+def add_record(self, record):
+    new_cols = list(set(record.keys()) - set(self.columns))
+    for c in new_cols:
+        self[c] = np.NAN
+    ss = " & ".join([f'((self["{k}"] == ' + (f'"{v}"' if isinstance(v, str) else (f'np.NAN' if v is np.NAN else f'{v}')) + f') | pd.isnull(self["{k}"]))' for k, v in record.items()])
+    if self.loc[eval(ss)].empty: #or np.all([True if pd.isnull(self.loc[eval(ss)][i]).values[0] else False for i in record.keys()]):
+        self = self.append(record, ignore_index=True)
+    else:
+        for cc in self.columns[self.loc[eval(ss)].isnull().any()]:
+            if cc in list(record.keys()):
+                self.loc[eval(ss), cc] = record[cc]
+    return self
+
+
+import pandas as pd
+pd.DataFrame.add_record = add_record
+
 plt.rcParams['figure.facecolor'] = (0.9, 0.9, 0.9)
 # matplotlib.use('TkAgg')
 if not torch.cuda.is_available():
@@ -29,6 +47,10 @@ if not torch.cuda.is_available():
 else:
     matplotlib.use('agg')
 
+
+plt.rcParams['figure.facecolor'] = (0.9, 0.9, 0.9)
+# matplotlib.use('TkAgg')
+# matplotlib.use('QtAgg')
 new_rc_params = {'text.usetex': False,
 "svg.fonttype": 'none'
 }
@@ -43,6 +65,40 @@ pd.set_option("expand_frame_repr", False) # print cols side by side as it's supp
 pd.set_option("display.max_rows", None, "display.max_columns", None)
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+#
+
+def get_all_dir_tokens(folder, delimiters=None):
+    if delimiters is None:
+        delimiters = os.path.sep, "_"
+    all_folders = [r for r, d, f in os.walk(folder) if not d]
+    all_subdirs = [r.split(folder)[1] for r in all_folders]
+
+    regexPattern = '|'.join(map(re.escape, delimiters))
+
+    all_dirs_tokens = [[i for i in re.split(regexPattern, d) if i] for d in all_subdirs]
+    return np.array(all_dirs_tokens).T, all_folders  # check if dimension is ok
+
+
+def rearrange_folders(folder, string, tokens, all_folders):
+    folder = folder.strip('//').strip('/')
+    # shutil.copytree(folder, folder + '_tmp')
+    # shutil.rmtree(folder)
+    pathlib.Path(folder).mkdir(parents=True, exist_ok=True)
+    tokens = tokens.T.tolist()
+    new_folders = [folder + '_tmp//' + f'{string}'.format(*i) for i in tokens]
+    # new_folders = [folder + '//{0}//{2}//{1}_{4}'.format(*i) for i in tokens]
+
+    for i in range(len(all_folders)):
+        old = all_folders[i]
+        new = new_folders[i]
+        pathlib.Path(new).mkdir(parents=True, exist_ok=True)
+        [shutil.copy(i, new) for i in glob.glob(old + '/**')]
+    shutil.move(folder, folder + '_bk')
+    shutil.move(folder + '_tmp', folder)
+
+# folder = './results/pomerantz_stimuli'
+# tokens, all_folders = get_all_dir_tokens(folder)
+# rearrange_folders(folder, '{0}//{2}//{1}_{4}', tokens, all_folders)
 
 
 def get_all_dir_tokens(folder, delimiters=None):

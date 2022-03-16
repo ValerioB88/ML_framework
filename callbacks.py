@@ -1,18 +1,18 @@
 """
 Ports of Callback classes from the Keras library.
 """
-from framework_utils import Logs
 import seaborn as sn
 from sty import fg, rs, ef
 from abc import ABC
 import numpy as np
 import neptune.new as neptune
-import framework_utils
 import pathlib
 import matplotlib.pyplot as plt
 import torch
 from time import time
-import framework_utils as utils
+
+from . import framework_utils as utils
+# import framework_utils as utils
 import pandas as pd
 import signal, os
 # from neptunecontrib.api import log_chart
@@ -531,6 +531,7 @@ class DuringTrainingTest(Callback):
             print(f"Testing " + fg.green + f"[{testing_loader.dataset.name_generator}]" + rs.fg)
             mid_test_cb = self.get_callbacks(log, testing_loader)
             if self.compute_conf_mat:
+
                 mid_test_cb += [ComputeConfMatrix(num_classes=len(testing_loader.dataset.classes),
                                                   weblogger=self.weblogger,
                                                   weblog_text=f'ConfMatrix test no. {self.num_tests}',
@@ -541,6 +542,7 @@ class DuringTrainingTest(Callback):
                                         train=False,
                                         callbacks=mid_test_cb,
                                         collect_images=True if self.plot_samples_corr_incorr else False)
+
         print("TEST IN EVAL MODE")
         self.model.eval()
         for testing_loader in self.testing_loaders:
